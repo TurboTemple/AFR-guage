@@ -1,0 +1,19 @@
+menu "AFR gauge: Spartan UART"
+
+    choice AFR_SPARTAN_EOL
+        prompt "Command line ending"
+        default AFR_SPARTAN_EOL_CRLF
+        help
+            Line ending sent after each Spartan command. The Lite's manual
+            does not say which it expects; change this if commands get no
+            reply (see Open questions).
+
+        config AFR_SPARTAN_EOL_CRLF
+            bool "CR LF"
+        config AFR_SPARTAN_EOL_CR
+            bool "CR"
+        config AFR_SPARTAN_EOL_LF
+            bool "LF"
+    endchoice
+
+endmenu

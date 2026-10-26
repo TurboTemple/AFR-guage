@@ -1,0 +1,12 @@
+menu "AFR gauge"
+
+    config AFR_SUPPLY_SENSE
+        bool "Spartan supply sense fitted on AIN2 (47k/10k divider)"
+        default n
+        help
+            The optional red-wire divider. With it, the gauge also uses the
+            Spartan's 12 V to detect power-up (above 9 V) and loss (under
+            8 V), and logs supply_v. Without it, AIN2 is not read and
+            supply_v is blank.
+
+endmenu

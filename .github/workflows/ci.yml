@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure (real Unity)
+        run: cmake -S test/host -B build/host -DAFR_FETCH_UNITY=ON
+      - name: Build
+        run: cmake --build build/host -j
+      - name: Unit tests and replay round trip
+        run: ctest --test-dir build/host --output-on-failure
+
+  firmware:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build for ESP32-S3 with ESP-IDF v5.5.5
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.5
+          target: esp32s3
+          path: .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: afr-gauge-firmware
+          path: |
+            build/afr-gauge.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/flasher_args.json

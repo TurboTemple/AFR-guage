@@ -1,0 +1,104 @@
+/* afr_replay: runs logged readings back through afr_core.
+ *
+ * stdin:  t_ms,v_out,led,supply_v       (one reading per line; supply blank
+ *                                        if not fitted)
+ * stdout: t_ms,state,lambda,warn        (recomputed)
+ *         # peaks rich=<λ> lean=<λ>     (last line)
+ *
+ * tools/replay.py drives this from a gauge log and compares the result with
+ * what the gauge logged. */
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "log_format.h"
+#include "pipeline.h"
+
+static void usage(void)
+{
+  fprintf(stderr,
+          "usage: afr_replay [--period-ms N] [--lam0 L] [--lam5 L] [--stoich S]\n"
+          "                  [--smooth-ms N] [--warn-lean L,MS] [--warn-rich L,MS] [--supply]\n");
+  exit(2);
+}
+
+static void parse_warn(const char *s, warn_cfg_t *w)
+{
+  char *end;
+  w->lambda = strtof(s, &end);
+  if (*end != ',') usage();
+  w->hold_ms = (uint32_t)strtoul(end + 1, NULL, 10);
+}
+
+int main(int argc, char **argv)
+{
+  afr_config_t cfg = {
+    .range = conv_range_default(),
+    .stoich = 14.7f,
+    .smooth_ms = 100,
+    .lean = { 1.10f, 1000 },
+    .rich = { 0.75f, 2000 },
+  };
+  unsigned period = 50;
+  bool supply = false;
+
+  for (int i = 1; i < argc; i++) {
+    const char *a = argv[i];
+    const char *v = i + 1 < argc ? argv[i + 1] : NULL;
+    if (!strcmp(a, "--supply")) { supply = true; continue; }
+    if (!v) usage();
+    if (!strcmp(a, "--period-ms")) period = (unsigned)strtoul(v, NULL, 10);
+    else if (!strcmp(a, "--lam0")) cfg.range.lam0 = strtof(v, NULL);
+    else if (!strcmp(a, "--lam5")) cfg.range.lam5 = strtof(v, NULL);
+    else if (!strcmp(a, "--stoich")) cfg.stoich = strtof(v, NULL);
+    else if (!strcmp(a, "--smooth-ms")) cfg.smooth_ms = (uint16_t)strtoul(v, NULL, 10);
+    else if (!strcmp(a, "--warn-lean")) parse_warn(v, &cfg.lean);
+    else if (!strcmp(a, "--warn-rich")) parse_warn(v, &cfg.rich);
+    else usage();
+    i++;
+  }
+  if (!conv_range_valid(cfg.range.lam0, cfg.range.lam5) || period == 0) usage();
+
+  static afr_pipeline_t p;
+  afr_pipeline_init(&p, &cfg, NULL, supply, (uint16_t)period, 0);
+  bool started = false;
+  reading_t r;
+  memset(&r, 0, sizeof r);
+  r.peak_rich = r.peak_lean = NAN;
+
+  char line[256];
+  while (fgets(line, sizeof line, stdin)) {
+    char *f[4] = { 0 };
+    int n = 0;
+    char *s = line;
+    while (n < 4) {
+      f[n++] = s;
+      char *c = strpbrk(s, ",\r\n");
+      if (!c) break;
+      bool last = *c != ',';
+      *c = '\0';
+      if (last) break;
+      s = c + 1;
+    }
+    if (n < 3 || !f[0][0]) continue;
+    uint32_t t = (uint32_t)strtoul(f[0], NULL, 10);
+    float v = f[1][0] ? strtof(f[1], NULL) : NAN;
+    led_pattern_t led = led_pattern_parse(f[2]);
+    float sv = (supply && n >= 4 && f[3][0]) ? strtof(f[3], NULL) : NAN;
+    if (!started) {
+      afr_pipeline_start(&p, t);
+      started = true;
+    }
+    afr_pipeline_step_volts(&p, t, v, led, sv, &r);
+    char lam[16];
+    log_fmt_fixed(lam, sizeof lam, r.lambda, 4);
+    printf("%lu,%s,%s,%c\n", (unsigned long)r.t_ms, gs_state_name(r.state), lam,
+           log_warn_char((warn_t)r.warn));
+  }
+  char pr[16], pl[16];
+  log_fmt_fixed(pr, sizeof pr, r.peak_rich, 4);
+  log_fmt_fixed(pl, sizeof pl, r.peak_lean, 4);
+  printf("# peaks rich=%s lean=%s\n", pr, pl);
+  return 0;
+}
