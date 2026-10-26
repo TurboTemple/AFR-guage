@@ -37,6 +37,7 @@ set(TESTS
   test_led_decoder
   test_gauge_state
   test_peaks
+  test_alarms
   test_smoothing
   test_pipeline
   test_settings
@@ -55,16 +56,14 @@ add_executable(afr_replay replay_main.c)
 target_link_libraries(afr_replay PRIVATE afr_core)
 target_compile_options(afr_replay PRIVATE -Wall -Wextra -Werror)
 
-# A simulated drive through the full 200 Hz path, logged at 20 Hz, then
-# replayed: tools/replay.py must reproduce its states, warnings and peaks.
+# A simulated session through the full path, logged at the full rate,
+# then replayed: tools/replay.py must reproduce its states, alarms and peaks.
 add_executable(afr_simlog simlog_main.c)
 target_link_libraries(afr_simlog PRIVATE afr_core)
 target_compile_options(afr_simlog PRIVATE -Wall -Wextra -Werror)
 
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_FOUND)
-  foreach(rate 10 20 50)
-    add_test(NAME replay_simlog_${rate}hz
-      COMMAND sh -c "$<TARGET_FILE:afr_simlog> --rate ${rate} > simlog_${rate}.csv && ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/../../tools/replay.py simlog_${rate}.csv --bin $<TARGET_FILE:afr_replay>")
-  endforeach()
+  add_test(NAME replay_simlog
+    COMMAND sh -c "$<TARGET_FILE:afr_simlog> > simlog.csv && ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/../../tools/replay.py simlog.csv --bin $<TARGET_FILE:afr_replay> --expect-alarm D")
 endif()

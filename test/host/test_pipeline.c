@@ -1,5 +1,6 @@
-/* End to end through afr_pipeline: a simulated Spartan power-up, sequencer,
- * warm-up and drive, sampled the way the firmware samples it. */
+/* End to end through afr_pipeline, sampled the way the firmware samples:
+ * the lambda ADC at 860 SPS through the decimator, the LED at 50 Hz and the
+ * throttle at 200 Hz from the second ADC. */
 #include "unity.h"
 
 #include <math.h>
@@ -10,27 +11,34 @@
 void setUp(void) { sim_srand(99); }
 void tearDown(void) {}
 
+#define RAW_US 1163u /* 860 SPS */
+
 static afr_pipeline_t p;
+static decim_t dec;
 static reading_t r;
-static uint32_t t_ms;
-static unsigned tick;
+static uint64_t t_us;
+static uint64_t next_led_us, next_tps_us;
 
 /* The simulated car. */
 static float chain_a, chain_b;  /* true divider/ADC calibration */
 static float spartan_v;         /* linear output */
 static uint32_t led_period, led_on;
-static float led_lit_v = 3.0f;
+static float tps_pct;           /* NAN: no TPS signal */
 static bool adc_fail;
-static unsigned shown_outside_ready;
+static unsigned shown_outside_ready, steps;
+
+#define TPS_CLOSED_V 0.60f
+#define TPS_WOT_V    4.40f
 
 static afr_config_t config(void)
 {
   afr_config_t c = {
     .range = conv_range_default(),
     .stoich = 14.7f,
-    .smooth_ms = 100,
-    .lean = { 1.10f, 1000 },
-    .rich = { 0.75f, 2000 },
+    .smooth_ms = 50,
+    .alarm = alarms_default_cfg(),
+    .tps_closed_v = TPS_CLOSED_V,
+    .tps_wot_v = TPS_WOT_V,
   };
   return c;
 }
@@ -40,31 +48,39 @@ static void start(const cal_coeffs_t *stored)
   afr_config_t c = config();
   afr_pipeline_init(&p, &c, stored, false, AFR_SAMPLE_MS, 0);
   afr_pipeline_start(&p, 0);
-  t_ms = 0;
-  tick = 0;
+  decim_init(&dec, SPIKE_CODES);
+  t_us = next_led_us = next_tps_us = 0;
   chain_a = CAL_A_NOMINAL;
   chain_b = 0.0f;
   spartan_v = 0.0f;
   led_period = 0;
   led_on = 0;
+  tps_pct = 0.0f;
   adc_fail = false;
-  shown_outside_ready = 0;
+  shown_outside_ready = steps = 0;
 }
 
-/* Run dur ms of 5 ms sampler ticks: AIN0 every tick, AIN1 every 4th. */
-static void run(uint32_t dur)
+static void run(uint32_t dur_ms)
 {
-  for (uint32_t end = t_ms + dur; t_ms < end; t_ms += AFR_SAMPLE_MS, tick++) {
-    afr_raw_t in = { .t_ms = t_ms };
-    in.lam_ok = !adc_fail;
-    in.lam_code = sim_code(spartan_v, chain_a, chain_b, 0.0005f);
-    if (tick % 4 == 0 && !adc_fail) {
-      in.led_new = true;
-      in.led_code = sim_adc_code(sim_blink(t_ms, led_period, led_on) ? led_lit_v : 0.0f);
+  uint64_t end = t_us + (uint64_t)dur_ms * 1000u;
+  for (; t_us < end; t_us += RAW_US) {
+    uint32_t t_ms = (uint32_t)(t_us / 1000u);
+    if (t_us >= next_led_us) {
+      next_led_us += 20000;
+      afr_pipeline_led_sample(&p, t_ms, sim_adc_code(sim_blink(t_ms, led_period, led_on) ? 3.0f : 0.0f));
     }
-    afr_pipeline_step_raw(&p, &in, &r);
-    /* No number ever outside READY (rails carry their end point). */
-    if (!gs_has_lambda(r.state) && !isnan(r.lambda)) shown_outside_ready++;
+    if (t_us >= next_tps_us) {
+      next_tps_us += 5000;
+      float v = isnan(tps_pct) ? 0.0f : TPS_CLOSED_V + (TPS_WOT_V - TPS_CLOSED_V) * tps_pct / 100.0f;
+      afr_pipeline_tps_sample(&p, !isnan(tps_pct), sim_code(v, CAL_A_NOMINAL, 0.0f, 0.0f));
+    }
+    float mean;
+    uint64_t t_mid;
+    if (decim_feed(&dec, sim_code(spartan_v, chain_a, chain_b, 0.0015f), t_us, &mean, &t_mid)) {
+      afr_pipeline_step_raw(&p, (uint32_t)(t_mid / 1000u), !adc_fail, mean, &r);
+      steps++;
+      if (!gs_has_lambda(r.state) && !isnan(r.lambda)) shown_outside_ready++;
+    }
   }
 }
 
@@ -78,6 +94,25 @@ static void sequencer(void)
   run(5000);
 }
 
+static void get_ready(void)
+{
+  start(NULL);
+  sequencer();
+  led_period = 0;
+  led_on = 1;
+  spartan_v = sim_v_for_lambda(1.0f);
+  run(2000);
+  TEST_ASSERT_EQUAL_INT(ST_READY, r.state);
+  afr_pipeline_take_events(&p);
+}
+
+static void test_rate_is_215hz(void)
+{
+  start(NULL);
+  run(10000);
+  TEST_ASSERT_UINT_WITHIN(3, 2150, steps);
+}
+
 static void test_cold_start_to_ready(void)
 {
   start(NULL);
@@ -85,25 +120,23 @@ static void test_cold_start_to_ready(void)
   TEST_ASSERT_EQUAL_INT(ST_NO_SPARTAN, r.state);
   TEST_ASSERT_TRUE(r.flags & FLAG_CAL_NOMINAL);
 
-  chain_a = CAL_A_NOMINAL * 1.008f; /* realistic chain errors */
+  chain_a = CAL_A_NOMINAL * 1.008f;
   chain_b = 0.012f;
   sequencer();
   TEST_ASSERT_EQUAL_INT(ST_SEQUENCER, r.state);
   TEST_ASSERT_TRUE(afr_pipeline_take_events(&p) & AFR_EVT_SPARTAN_UP);
 
-  /* Warm-up: output undocumented, LED slow. */
   spartan_v = 1.2f;
   run(20);
   TEST_ASSERT_EQUAL_INT(ST_WARMING, r.state);
   TEST_ASSERT_TRUE(r.flags & FLAG_CAL_FRESH);
   TEST_ASSERT_TRUE(afr_pipeline_take_events(&p) & AFR_EVT_CAL_ACCEPTED);
-  TEST_ASSERT_FLOAT_WITHIN(chain_a * 0.001, chain_a, p.cal.a);
-  TEST_ASSERT_FLOAT_WITHIN(0.002, chain_b, p.cal.b);
+  TEST_ASSERT_FLOAT_WITHIN(chain_a * 0.0005, chain_a, p.cal.a);
+  TEST_ASSERT_FLOAT_WITHIN(0.001, chain_b, p.cal.b);
   run(20000);
   TEST_ASSERT_EQUAL_INT(ST_WARMING, r.state);
   TEST_ASSERT_FLOAT_IS_NAN(r.lambda);
 
-  /* Operating temperature. */
   led_period = 0;
   led_on = 1;
   spartan_v = sim_v_for_lambda(1.00f);
@@ -112,13 +145,13 @@ static void test_cold_start_to_ready(void)
   run(200);
   TEST_ASSERT_EQUAL_INT(ST_READY, r.state);
   run(500);
-  TEST_ASSERT_FLOAT_WITHIN(0.005, 1.00, r.lambda);
-  TEST_ASSERT_FLOAT_WITHIN(0.005, 1.00, r.lambda_disp);
-  TEST_ASSERT_FLOAT_WITHIN(0.08, 14.7, r.afr);
+  TEST_ASSERT_FLOAT_WITHIN(0.002, 1.00, r.lambda);
+  TEST_ASSERT_FLOAT_WITHIN(0.002, 1.00, r.lambda_disp);
   TEST_ASSERT_EQUAL_UINT(0, shown_outside_ready);
 }
 
-/* Acceptance: displayed lambda within 0.005 from 0.5 V to 4.5 V. */
+/* Every sample, not just the display: the logged lambda within 0.002 of
+ * the truth from 0.5 V to 4.5 V with realistic chain errors and noise. */
 static void test_accuracy_across_range(void)
 {
   start(NULL);
@@ -127,18 +160,33 @@ static void test_accuracy_across_range(void)
   sequencer();
   led_period = 0;
   led_on = 1;
+  spartan_v = 2.5f;
+  run(2000);
   for (float v = 0.5f; v <= 4.501f; v += 0.25f) {
     spartan_v = v;
-    run(2000);
+    run(200);
     TEST_ASSERT_EQUAL_INT(ST_READY, r.state);
     float truth = LAMBDA_0V_DEFAULT + 0.136f * v;
-    TEST_ASSERT_FLOAT_WITHIN(0.005, truth, r.lambda_disp);
+    for (int i = 0; i < 40; i++) {
+      run(5);
+      TEST_ASSERT_FLOAT_WITHIN(0.002, truth, r.lambda);
+    }
   }
+}
+
+static void test_step_latency(void)
+{
+  /* A 0.85 -> 1.00 step: the sample seen 10 ms later has settled. */
+  get_ready();
+  spartan_v = sim_v_for_lambda(0.85f);
+  run(100);
+  spartan_v = sim_v_for_lambda(1.00f);
+  run(10);
+  TEST_ASSERT_FLOAT_WITHIN(0.003, 1.00, r.lambda);
 }
 
 static void test_uncalibrated_error_is_removed(void)
 {
-  /* Without the sequencer, a 1.5 % chain error would show. */
   start(NULL);
   chain_a = CAL_A_NOMINAL * 1.015f;
   spartan_v = 2.0f; /* booted after the Spartan: no plateaus */
@@ -192,75 +240,77 @@ static void test_rejected_fit_keeps_last_good(void)
   TEST_ASSERT_FLOAT_WITHIN(1e-9, CAL_A_NOMINAL, p.cal.a);
 }
 
-static void get_ready(void)
-{
-  start(NULL);
-  sequencer();
-  led_period = 0;
-  led_on = 1;
-  spartan_v = sim_v_for_lambda(1.0f);
-  run(2000);
-  TEST_ASSERT_EQUAL_INT(ST_READY, r.state);
-  afr_pipeline_take_events(&p);
-}
-
-static void test_overrun_never_lean_warns(void)
+/* A pass: launch at WOT, rich and steady; then a lean-out; then the lift
+ * and fuel cut. */
+static void test_pass_lean_out_alarms_fast(void)
 {
   get_ready();
-  spartan_v = 5.0f; /* fuel cut */
-  run(8000);
-  TEST_ASSERT_EQUAL_INT(ST_LEAN_RAIL, r.state);
-  TEST_ASSERT_EQUAL_INT(WARN_NONE, r.warn);
-  TEST_ASSERT_FLOAT_WITHIN(1e-6, 1.36, r.lambda);
-  TEST_ASSERT_TRUE(r.flags & FLAG_LEAN_RAIL_SEEN);
-  spartan_v = sim_v_for_lambda(1.0f);
-  run(100);
-  TEST_ASSERT_EQUAL_INT(ST_READY, r.state);
-  /* Rail time is not a lean peak. */
-  TEST_ASSERT_TRUE(r.peak_lean < 1.01f);
-}
+  tps_pct = 100.0f;
+  spartan_v = sim_v_for_lambda(0.82f);
+  run(3000);
+  TEST_ASSERT_EQUAL_INT(ALARM_NONE, r.alarm);
+  TEST_ASSERT_TRUE(r.flags & FLAG_UNDER_LOAD);
+  TEST_ASSERT_TRUE(r.flags & FLAG_TPS_OK);
 
-static void test_lean_and_rich_warnings(void)
-{
-  get_ready();
-  spartan_v = sim_v_for_lambda(1.15f);
-  run(900);
-  TEST_ASSERT_EQUAL_INT(WARN_NONE, r.warn);
-  run(300);
-  TEST_ASSERT_EQUAL_INT(WARN_LEAN, r.warn);
-  spartan_v = sim_v_for_lambda(1.0f);
-  run(100);
-  TEST_ASSERT_EQUAL_INT(WARN_NONE, r.warn);
-  spartan_v = 0.0f; /* rich rail */
-  run(2200);
-  TEST_ASSERT_EQUAL_INT(ST_RICH_RAIL, r.state);
-  TEST_ASSERT_EQUAL_INT(WARN_RICH, r.warn);
-  TEST_ASSERT_FLOAT_WITHIN(0.002, 1.15, r.peak_lean);
-}
-
-static void test_peak_reset(void)
-{
-  get_ready();
-  spartan_v = sim_v_for_lambda(0.85f);
-  run(500);
-  TEST_ASSERT_FLOAT_WITHIN(0.002, 0.85, r.peak_rich);
-  afr_pipeline_reset_peaks(&p);
-  run(5);
-  TEST_ASSERT_FLOAT_WITHIN(0.002, 0.85, r.peak_rich);
   spartan_v = sim_v_for_lambda(0.95f);
-  run(500);
-  /* The median filter needs a sample to follow the step. */
-  TEST_ASSERT_FLOAT_WITHIN(0.002, 0.85, r.peak_rich);
-  afr_pipeline_reset_peaks(&p);
+  run(95);
+  TEST_ASSERT_EQUAL_INT(ALARM_NONE, r.alarm);
+  run(15);
+  TEST_ASSERT_EQUAL_INT(ALARM_LEAN_LOAD, r.alarm);
+  TEST_ASSERT_TRUE(afr_pipeline_take_events(&p) & AFR_EVT_ALARM);
+
+  /* Lift: the live alarm ends with the load, the event stays. */
+  tps_pct = 0.0f;
+  spartan_v = 5.0f;
+  run(5000);
+  TEST_ASSERT_EQUAL_INT(ST_LEAN_RAIL, r.state);
+  TEST_ASSERT_EQUAL_INT(ALARM_NONE, r.alarm);
+  TEST_ASSERT_TRUE(r.flags & FLAG_EVENT_PENDING);
+  TEST_ASSERT_EQUAL_INT(ALARM_LEAN_LOAD, r.event.type);
+  TEST_ASSERT_FLOAT_WITHIN(0.003, 0.95, r.event.lambda);
+  TEST_ASSERT_FLOAT_WITHIN(0.5, 100.0, r.event.tps);
+  /* Peaks are from the pass, not the fuel cut. */
+  TEST_ASSERT_FLOAT_WITHIN(0.003, 0.95, r.peak_lean);
+  TEST_ASSERT_FLOAT_WITHIN(0.003, 0.82, r.peak_rich);
+  TEST_ASSERT_FALSE(r.flags & FLAG_LEAN_RAIL_SEEN);
+
+  afr_pipeline_ack_alarm(&p);
   run(5);
-  TEST_ASSERT_FLOAT_WITHIN(0.002, 0.95, r.peak_rich);
+  TEST_ASSERT_FALSE(r.flags & FLAG_EVENT_PENDING);
+}
+
+static void test_clean_pass_and_fuel_cut_no_alarm(void)
+{
+  get_ready();
+  for (int pass = 0; pass < 5; pass++) {
+    tps_pct = 100.0f;
+    spartan_v = sim_v_for_lambda(0.80f + 0.01f * (float)pass);
+    run(9000);
+    tps_pct = 0.0f;
+    spartan_v = 5.0f;
+    run(6000);
+    spartan_v = sim_v_for_lambda(1.0f);
+    run(20000);
+  }
+  TEST_ASSERT_FALSE(r.flags & FLAG_EVENT_PENDING);
+  TEST_ASSERT_EQUAL_INT(ALARM_NONE, r.alarm);
+}
+
+static void test_tps_fault_flagged(void)
+{
+  get_ready();
+  tps_pct = NAN; /* wire off: reads 0 V */
+  run(50);
+  TEST_ASSERT_TRUE(isnan(r.tps));
+  TEST_ASSERT_TRUE(r.flags & FLAG_TPS_FAULT);
+  TEST_ASSERT_FALSE(r.flags & FLAG_TPS_OK);
 }
 
 static void test_spartan_power_loss(void)
 {
   get_ready();
   spartan_v = 0.0f;
-  led_on = 0; /* LED off */
+  led_on = 0;
   run(9900);
   TEST_ASSERT_TRUE(r.state != ST_NO_SPARTAN);
   run(500);
@@ -273,7 +323,7 @@ static void test_i2c_fault(void)
 {
   get_ready();
   adc_fail = true;
-  run(15);
+  run(20);
   TEST_ASSERT_EQUAL_INT(ST_FAULT, r.state);
   TEST_ASSERT_EQUAL_INT(FAULT_I2C, r.fault);
   TEST_ASSERT_FLOAT_IS_NAN(r.lambda);
@@ -285,33 +335,36 @@ static void test_i2c_fault(void)
 static void test_volts_mode_replays_states(void)
 {
   afr_config_t c = config();
-  afr_pipeline_init(&p, &c, NULL, false, 50, 0);
+  afr_pipeline_init(&p, &c, NULL, false, 5, 0);
   afr_pipeline_start(&p, 0);
   uint32_t t = 0;
-  for (; t < 1000; t += 50) afr_pipeline_step_volts(&p, t, 0.0f, LED_OFF, NAN, &r);
+  for (; t < 1000; t += 5) afr_pipeline_step_volts(&p, t, 0.0f, LED_OFF, NAN, 0.0f, &r);
   TEST_ASSERT_EQUAL_INT(ST_NO_SPARTAN, r.state);
-  for (; t < 6000; t += 50) afr_pipeline_step_volts(&p, t, 1.666f, LED_SLOW, NAN, &r);
+  for (; t < 6000; t += 5) afr_pipeline_step_volts(&p, t, 1.666f, LED_SLOW, NAN, 0.0f, &r);
   TEST_ASSERT_EQUAL_INT(ST_SEQUENCER, r.state);
-  for (; t < 11000; t += 50) afr_pipeline_step_volts(&p, t, 3.333f, LED_SLOW, NAN, &r);
-  afr_pipeline_step_volts(&p, t, 1.0f, LED_SLOW, NAN, &r);
+  for (; t < 11000; t += 5) afr_pipeline_step_volts(&p, t, 3.333f, LED_SLOW, NAN, 0.0f, &r);
+  afr_pipeline_step_volts(&p, t, 1.0f, LED_SLOW, NAN, 0.0f, &r);
   TEST_ASSERT_EQUAL_INT(ST_WARMING, r.state);
-  t += 50;
-  afr_pipeline_step_volts(&p, t, 2.0f, LED_STEADY, NAN, &r);
+  t += 5;
+  afr_pipeline_step_volts(&p, t, 2.0f, LED_STEADY, NAN, 50.0f, &r);
   TEST_ASSERT_EQUAL_INT(ST_READY, r.state);
   TEST_ASSERT_FLOAT_WITHIN(1e-5, 0.68 + 0.136 * 2.0, r.lambda);
+  TEST_ASSERT_FLOAT_WITHIN(1e-5, 50.0, r.tps);
 }
 
 int main(void)
 {
   UNITY_BEGIN();
+  RUN_TEST(test_rate_is_215hz);
   RUN_TEST(test_cold_start_to_ready);
   RUN_TEST(test_accuracy_across_range);
+  RUN_TEST(test_step_latency);
   RUN_TEST(test_uncalibrated_error_is_removed);
   RUN_TEST(test_stored_calibration_used_when_no_plateaus);
   RUN_TEST(test_rejected_fit_keeps_last_good);
-  RUN_TEST(test_overrun_never_lean_warns);
-  RUN_TEST(test_lean_and_rich_warnings);
-  RUN_TEST(test_peak_reset);
+  RUN_TEST(test_pass_lean_out_alarms_fast);
+  RUN_TEST(test_clean_pass_and_fuel_cut_no_alarm);
+  RUN_TEST(test_tps_fault_flagged);
   RUN_TEST(test_spartan_power_loss);
   RUN_TEST(test_i2c_fault);
   RUN_TEST(test_volts_mode_replays_states);

@@ -3,6 +3,7 @@
 #include <math.h>
 #include <string.h>
 
+#include "alarms.h"
 #include "log_format.h"
 
 void setUp(void) {}
@@ -19,7 +20,8 @@ static reading_t row(void)
   r.v_out = 1.4059f;
   r.led_pattern = LED_STEADY;
   r.supply_v = 13.92f;
-  r.warn = WARN_NONE;
+  r.tps = 97.25f;
+  r.alarm = ALARM_NONE;
   return r;
 }
 
@@ -28,10 +30,10 @@ static void test_spec_example_row(void)
   char b[LOG_ROW_MAX];
   reading_t r = row();
   size_t n = log_format_row(b, sizeof b, &r, 0);
-  TEST_ASSERT_EQUAL_STRING("182340,READY,0.8712,12.81,1.4059,STEADY,13.92,0,0\n", b);
+  TEST_ASSERT_EQUAL_STRING("182340,READY,0.8712,12.81,1.4059,STEADY,97.3,13.92,0,0\n", b);
   TEST_ASSERT_EQUAL_UINT(strlen(b), n);
-  /* About 60 bytes a row at 20 Hz: 4.3 MB per hour. */
-  TEST_ASSERT_TRUE(n <= 60);
+  /* About 60 bytes a row at 215 Hz: 46 MB per hour. */
+  TEST_ASSERT_TRUE(n <= 64);
 }
 
 static void test_blank_columns(void)
@@ -43,9 +45,10 @@ static void test_blank_columns(void)
   r.afr = NAN;
   r.led_pattern = LED_SLOW;
   r.supply_v = NAN;
-  r.warn = WARN_LEAN;
+  r.tps = NAN;
+  r.alarm = ALARM_LEAN;
   log_format_row(b, sizeof b, &r, 3);
-  TEST_ASSERT_EQUAL_STRING("182340,WARMING,,,1.4059,SLOW,,L,3\n", b);
+  TEST_ASSERT_EQUAL_STRING("182340,WARMING,,,1.4059,SLOW,,,L,3\n", b);
 }
 
 static void test_rail_row(void)
@@ -56,9 +59,9 @@ static void test_rail_row(void)
   r.lambda = 1.36f;
   r.afr = 1.36f * 14.7f;
   r.v_out = 5.0f;
-  r.warn = WARN_RICH;
+  r.alarm = ALARM_LEAN_LOAD;
   log_format_row(b, sizeof b, &r, 0);
-  TEST_ASSERT_EQUAL_STRING("182340,LEAN_RAIL,1.3600,19.99,5.0000,STEADY,13.92,R,0\n", b);
+  TEST_ASSERT_EQUAL_STRING("182340,LEAN_RAIL,1.3600,19.99,5.0000,STEADY,97.3,13.92,D,0\n", b);
 }
 
 static void test_fixed(void)

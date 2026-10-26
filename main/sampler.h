@@ -1,9 +1,16 @@
-/* The `sampler` task (core 1, highest app priority): every 5 ms it reads
- * the ADS1115 round-robin (AIN0 every 5 ms, AIN1 every 20 ms, AIN2 every
- * 100 ms), runs afr_pipeline, hands the newest reading to the UI through a
- * one-slot queue (xQueueOverwrite) and every reading at the log rate to the
- * logger's 256-slot queue, dropping and counting rows rather than ever
- * blocking. */
+/* Sampling.
+ *
+ * `sampler` (core 1, highest app priority): the lambda ADS1115 converts
+ * continuously at 860 SPS and pulses ALERT/RDY on GPIO43 at each
+ * conversion. The ISR timestamps the pulse and wakes the task, which reads
+ * the code (one 2-byte I2C read), decimates by 4 with spike rejection and
+ * runs afr_pipeline about every 4.65 ms. Every sample goes to the UI
+ * (one-slot queue, xQueueOverwrite) and to the logger (zero wait; rows are
+ * dropped and counted, never blocking).
+ *
+ * `aux` (core 1, below the sampler): the second ADS1115 in single-shot
+ * mode, TPS at 200 Hz, LED at 50 Hz, supply at 10 Hz. Values reach the
+ * sampler through a mailbox, so only the sampler touches the pipeline. */
 #pragma once
 
 #include <stdbool.h>
@@ -13,14 +20,27 @@
 #include "freertos/event_groups.h"
 #include "pipeline.h"
 
-/* adc NULL: the ADS1115 was not found; the gauge shows FAULT. */
-esp_err_t sampler_start(ads1115_t *adc, const afr_config_t *cfg, const cal_coeffs_t *stored,
-                        bool supply_fitted, uint8_t log_rate_hz);
-/* Applied at the start of the next 5 ms tick. */
-void sampler_set_config(const afr_config_t *cfg, uint8_t log_rate_hz);
+#define SAMPLER_RDY_GPIO 43
+
+typedef struct {
+  uint32_t raw_conversions;  /* RDY pulses handled */
+  uint32_t missed;           /* conversions not read in time */
+  uint32_t rdy_timeouts;     /* no RDY for 5 ms */
+  uint32_t spikes;           /* blocks with a spike rejected */
+  uint32_t aux_errors;       /* failed housekeeping reads */
+} sampler_stats_t;
+
+/* lambda NULL: that ADC was not found (FAULT). aux NULL: the LED/TPS ADC
+ * was not found (FAULT). */
+esp_err_t sampler_start(ads1115_t *lambda, ads1115_t *aux, const afr_config_t *cfg,
+                        const cal_coeffs_t *stored, bool supply_fitted);
+/* Applied before the next sample. */
+void sampler_set_config(const afr_config_t *cfg);
 void sampler_reset_peaks(void);
+void sampler_ack_alarm(void);
 /* The newest reading (non-blocking). */
 bool sampler_latest(reading_t *out);
 /* Bits are AFR_EVT_*. */
 EventGroupHandle_t sampler_events(void);
 void sampler_cal(cal_coeffs_t *cal, cal_source_t *src, bool *rejected);
+sampler_stats_t sampler_stats(void);

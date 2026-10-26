@@ -32,6 +32,11 @@ typedef struct {
   uint32_t cal_time;
   bool     rtc_valid;
   bool     battery;
+  uint32_t raw_conversions; /* lambda ADC conversions read */
+  uint32_t missed;          /* conversions not read in time */
+  uint32_t rdy_timeouts;    /* gaps in the conversion-ready pulses */
+  uint32_t spikes;          /* blocks with a spike rejected */
+  uint32_t aux_errors;      /* failed LED/TPS reads */
 } ui_status_t;
 
 typedef struct {
@@ -41,6 +46,10 @@ typedef struct {
   bool (*get_reading)(reading_t *out);
   void (*get_status)(ui_status_t *out);
   void (*reset_peaks)(void);
+  /* The driver has seen the latched alarm event. */
+  void (*ack_alarm)(void);
+  /* TPS sensor volts now, for learning closed and WOT; NAN if unknown. */
+  float (*tps_volts)(void);
   void (*settings_changed)(const afr_settings_t *s);
   void (*set_brightness)(int percent);
   void (*set_clock)(const struct tm *tm);

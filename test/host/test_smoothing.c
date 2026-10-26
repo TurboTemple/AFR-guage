@@ -52,30 +52,76 @@ static void test_nan_resets(void)
   TEST_ASSERT_FLOAT_WITHIN(1e-6, 1.2, smoother_feed(&s, 1.2f, 10, 100));
 }
 
-static void test_median_removes_spike(void)
+static void test_decim_mean(void)
 {
-  median3_t m;
-  median3_reset(&m);
-  TEST_ASSERT_FLOAT_WITHIN(1e-6, 2.0, median3_feed(&m, 2.0f));
-  TEST_ASSERT_FLOAT_WITHIN(1e-6, 2.1, median3_feed(&m, 2.1f));
-  TEST_ASSERT_FLOAT_WITHIN(1e-6, 2.1, median3_feed(&m, 4.9f)); /* spike */
-  TEST_ASSERT_FLOAT_WITHIN(1e-6, 2.2, median3_feed(&m, 2.2f));
-  TEST_ASSERT_FLOAT_WITHIN(1e-6, 2.3, median3_feed(&m, 2.3f));
-  /* A real step passes after one sample of delay. */
-  TEST_ASSERT_FLOAT_WITHIN(1e-6, 2.3, median3_feed(&m, 3.0f));
-  TEST_ASSERT_FLOAT_WITHIN(1e-6, 3.0, median3_feed(&m, 3.0f));
+  decim_t d;
+  decim_init(&d, 150);
+  float m;
+  uint64_t tm;
+  TEST_ASSERT_FALSE(decim_feed(&d, 1000, 0, &m, &tm));
+  TEST_ASSERT_FALSE(decim_feed(&d, 1002, 1163, &m, &tm));
+  TEST_ASSERT_FALSE(decim_feed(&d, 1004, 2326, &m, &tm));
+  TEST_ASSERT_TRUE(decim_feed(&d, 1006, 3489, &m, &tm));
+  TEST_ASSERT_FLOAT_WITHIN(1e-6, 1003.0, m);
+  TEST_ASSERT_EQUAL_UINT(1744, tm);
+  /* Past 2^32 us (71.6 minutes) time keeps rising. */
+  uint64_t base = 5000000000ULL;
+  for (int i = 0; i < 4; i++) decim_feed(&d, 1000, base + (uint64_t)i * 1163u, &m, &tm);
+  TEST_ASSERT_TRUE(tm > base);
+  TEST_ASSERT_EQUAL_UINT(0, d.spikes);
 }
 
-static void test_median_all_orders(void)
+static void test_decim_rejects_spike(void)
 {
-  static const float v[6][3] = { {1, 2, 3}, {1, 3, 2}, {2, 1, 3}, {2, 3, 1}, {3, 1, 2}, {3, 2, 1} };
-  for (int i = 0; i < 6; i++) {
-    median3_t m;
-    median3_reset(&m);
-    median3_feed(&m, v[i][0]);
-    median3_feed(&m, v[i][1]);
-    TEST_ASSERT_FLOAT_WITHIN(1e-6, 2.0, median3_feed(&m, v[i][2]));
+  decim_t d;
+  decim_init(&d, 150);
+  float m;
+  uint64_t tm;
+  decim_feed(&d, 1000, 0, &m, &tm);
+  decim_feed(&d, 9000, 1, &m, &tm); /* ignition spike */
+  decim_feed(&d, 1002, 2, &m, &tm);
+  TEST_ASSERT_TRUE(decim_feed(&d, 1004, 3, &m, &tm));
+  /* Drops 9000 and 1000, keeps 1002 and 1004. */
+  TEST_ASSERT_FLOAT_WITHIN(1e-6, 1003.0, m);
+  TEST_ASSERT_EQUAL_UINT(1, d.spikes);
+}
+
+static void test_decim_ramp_unbiased(void)
+{
+  /* A fast real ramp spreads wider than the spike limit; trimming a linear
+   * ramp still gives its mean. */
+  decim_t d;
+  decim_init(&d, 150);
+  float m;
+  uint64_t tm;
+  int16_t c[4] = { 10000, 10200, 10400, 10600 };
+  for (int i = 0; i < 3; i++) decim_feed(&d, c[i], (uint64_t)i, &m, &tm);
+  TEST_ASSERT_TRUE(decim_feed(&d, c[3], 3, &m, &tm));
+  TEST_ASSERT_FLOAT_WITHIN(1e-3, 10300.0, m);
+}
+
+static void test_decim_noise_reduction(void)
+{
+  /* Averaging 4 halves the noise. */
+  decim_t d;
+  decim_init(&d, 150);
+  uint32_t seed = 7;
+  double ss_raw = 0, ss_out = 0;
+  int n_raw = 0, n_out = 0;
+  for (int i = 0; i < 40000; i++) {
+    seed = seed * 1664525u + 1013904223u;
+    int16_t noise = (int16_t)((int32_t)(seed >> 26) - 32); /* uniform +/-32 */
+    ss_raw += (double)noise * noise;
+    n_raw++;
+    float m;
+    uint64_t tm;
+    if (decim_feed(&d, (int16_t)(10000 + noise), (uint64_t)i, &m, &tm)) {
+      ss_out += ((double)m - 10000.0) * ((double)m - 10000.0);
+      n_out++;
+    }
   }
+  double ratio = sqrt(ss_out / n_out) / sqrt(ss_raw / n_raw);
+  TEST_ASSERT_FLOAT_WITHIN(0.05, 0.5, ratio);
 }
 
 int main(void)
@@ -85,7 +131,9 @@ int main(void)
   RUN_TEST(test_rate_independent);
   RUN_TEST(test_zero_tau_passes_through);
   RUN_TEST(test_nan_resets);
-  RUN_TEST(test_median_removes_spike);
-  RUN_TEST(test_median_all_orders);
+  RUN_TEST(test_decim_mean);
+  RUN_TEST(test_decim_rejects_spike);
+  RUN_TEST(test_decim_ramp_unbiased);
+  RUN_TEST(test_decim_noise_reduction);
   return UNITY_END();
 }

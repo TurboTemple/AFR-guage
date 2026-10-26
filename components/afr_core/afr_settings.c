@@ -3,19 +3,27 @@
 #include <math.h>
 
 #include "calibration.h"
+#include "spartan_proto.h"
 
 void settings_defaults(afr_settings_t *s)
 {
+  alarm_cfg_t a = alarms_default_cfg();
   s->fuel = FUEL_PETROL;
   s->fuel_custom = 14.7f;
   s->primary_unit = UNIT_LAMBDA;
   s->show_afr = false;
-  s->warn_lean = 1.10f;
-  s->warn_lean_ms = 1000;
-  s->warn_rich = 0.75f;
-  s->warn_rich_ms = 2000;
-  s->smooth_ms = 100;
-  s->log_rate_hz = 20;
+  s->lean_load = a.lean_load;
+  s->lean_load_ms = (uint16_t)a.lean_load_ms;
+  s->lean_part = a.lean_part;
+  s->lean_part_ms = (uint16_t)a.lean_part_ms;
+  s->rich = a.rich;
+  s->rich_ms = (uint16_t)a.rich_ms;
+  s->load_pct = (uint8_t)a.load_pct;
+  s->closed_pct = (uint8_t)a.closed_pct;
+  s->tps_closed_v = NAN;
+  s->tps_wot_v = NAN;
+  s->smooth_ms = 50;
+  s->spartan_perf = SP_PERF_10MS;
   s->bright_day = 80;
   s->bright_night = 25;
   s->night = false;
@@ -31,7 +39,7 @@ static bool clampf(float *v, float lo, float hi, float dflt)
   if (isnan(*v)) *v = dflt;
   else if (*v < lo) *v = lo;
   else if (*v > hi) *v = hi;
-  return *v != old || isnan(old);
+  return *v != old;
 }
 
 static bool clampu(uint32_t v, uint32_t lo, uint32_t hi, uint32_t *out)
@@ -51,15 +59,27 @@ bool settings_validate(afr_settings_t *s)
   if (s->fuel >= FUEL_COUNT) { s->fuel = FUEL_PETROL; ch = true; }
   ch |= clampf(&s->fuel_custom, 5.0f, 20.0f, 14.7f);
   if (s->primary_unit > UNIT_AFR) { s->primary_unit = UNIT_LAMBDA; ch = true; }
-  ch |= clampf(&s->warn_lean, 1.00f, 1.30f, 1.10f);
-  CLAMP_U(warn_lean_ms, 200, 5000);
-  ch |= clampf(&s->warn_rich, 0.68f, 0.95f, 0.75f);
-  CLAMP_U(warn_rich_ms, 200, 5000);
-  CLAMP_U(smooth_ms, 0, 500);
-  if (s->log_rate_hz != 10 && s->log_rate_hz != 20 && s->log_rate_hz != 50) {
-    s->log_rate_hz = s->log_rate_hz < 15 ? 10 : s->log_rate_hz < 35 ? 20 : 50;
+  ch |= clampf(&s->lean_load, 0.75f, 1.05f, 0.90f);
+  CLAMP_U(lean_load_ms, 20, 1000);
+  ch |= clampf(&s->lean_part, 1.00f, 1.30f, 1.10f);
+  CLAMP_U(lean_part_ms, 100, 3000);
+  ch |= clampf(&s->rich, 0.68f, 0.85f, 0.72f);
+  CLAMP_U(rich_ms, 100, 3000);
+  CLAMP_U(load_pct, 10, 90);
+  CLAMP_U(closed_pct, 0, 20);
+  if (s->closed_pct + 5 > s->load_pct) { s->closed_pct = (uint8_t)(s->load_pct - 5); ch = true; }
+  /* Drop a learnt TPS end whose volts are implausible; the other end is
+   * kept so it need not be learnt again. */
+  if (!isnan(s->tps_closed_v) && (s->tps_closed_v < TPS_V_MIN || s->tps_closed_v > TPS_V_MAX)) {
+    s->tps_closed_v = NAN;
     ch = true;
   }
+  if (!isnan(s->tps_wot_v) && (s->tps_wot_v < TPS_V_MIN || s->tps_wot_v > TPS_V_MAX)) {
+    s->tps_wot_v = NAN;
+    ch = true;
+  }
+  CLAMP_U(smooth_ms, 0, 500);
+  CLAMP_U(spartan_perf, SP_PERF_20MS, SP_PERF_LEAN);
   CLAMP_U(bright_day, 5, 100);
   CLAMP_U(bright_night, 5, 100);
   if (s->cal_valid) {
@@ -75,4 +95,15 @@ bool settings_validate(afr_settings_t *s)
 float settings_stoich(const afr_settings_t *s)
 {
   return conv_stoich((fuel_t)s->fuel, s->fuel_custom);
+}
+
+alarm_cfg_t settings_alarm_cfg(const afr_settings_t *s)
+{
+  alarm_cfg_t a = {
+    .lean_load = s->lean_load, .lean_load_ms = s->lean_load_ms,
+    .lean_part = s->lean_part, .lean_part_ms = s->lean_part_ms,
+    .rich = s->rich, .rich_ms = s->rich_ms,
+    .load_pct = (float)s->load_pct, .closed_pct = (float)s->closed_pct,
+  };
+  return a;
 }

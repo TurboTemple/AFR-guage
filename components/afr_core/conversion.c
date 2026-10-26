@@ -1,5 +1,7 @@
 #include "conversion.h"
 
+#include <math.h>
+
 /* E10 and E85 from AA1Car. The Spartan scales to petrol at 14.7, so lambda
  * is the true reading whatever the fuel. */
 static const float k_stoich[FUEL_CUSTOM] = { 14.7f, 14.08f, 9.7f };
@@ -30,6 +32,18 @@ float conv_code_to_adc_volts(int32_t code)
 float conv_code_to_supply_v(int32_t code)
 {
   return conv_code_to_adc_volts(code) / SUPPLY_DIVIDER;
+}
+
+bool conv_tps_learnt(float v_closed, float v_wot)
+{
+  return !isnan(v_closed) && !isnan(v_wot) && fabsf(v_wot - v_closed) >= TPS_MIN_SPAN_V;
+}
+
+float conv_tps_pct(float v, float v_closed, float v_wot)
+{
+  if (!conv_tps_learnt(v_closed, v_wot) || isnan(v) || v < TPS_V_MIN || v > TPS_V_MAX) return NAN;
+  float pct = 100.0f * (v - v_closed) / (v_wot - v_closed);
+  return pct < 0.0f ? 0.0f : pct > 100.0f ? 100.0f : pct;
 }
 
 float conv_lambda(const lambda_range_t *r, float v_out)

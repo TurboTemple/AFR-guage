@@ -15,12 +15,18 @@ static const char *NS = "afr";
 #define K_FUEL_CUST  "fuel_custom"
 #define K_UNIT       "primary_unit"
 #define K_SHOW_AFR   "show_afr"
-#define K_WARN_LEAN  "warn_lean"     /* lambda x 1000 */
-#define K_LEAN_MS    "warn_lean_ms"
-#define K_WARN_RICH  "warn_rich"     /* lambda x 1000 */
-#define K_RICH_MS    "warn_rich_ms"
+#define K_LEAN_LOAD  "lean_load"     /* lambda x 1000 */
+#define K_LEAN_LD_MS "lean_load_ms"
+#define K_LEAN_PART  "lean_part"     /* lambda x 1000 */
+#define K_LEAN_PT_MS "lean_part_ms"
+#define K_RICH       "rich"          /* lambda x 1000 */
+#define K_RICH_MS    "rich_ms"
+#define K_LOAD_PCT   "load_pct"
+#define K_CLOSED_PCT "closed_pct"
+#define K_TPS_CLOSED "tps_closed_v"  /* float bits */
+#define K_TPS_WOT    "tps_wot_v"
 #define K_SMOOTH     "smooth_ms"
-#define K_LOG_RATE   "log_rate_hz"
+#define K_SP_PERF    "spartan_perf"
 #define K_BR_DAY     "bright_day"
 #define K_BR_NIGHT   "bright_night"
 #define K_NIGHT      "night"
@@ -30,6 +36,7 @@ static const char *NS = "afr";
 
 static uint32_t fbits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 static float bitsf(uint32_t u) { float f; memcpy(&f, &u, 4); return f; }
+static uint16_t milli(float v) { return (uint16_t)lroundf(v * 1000.0f); }
 
 static void get_u8(nvs_handle_t h, const char *k, uint8_t *v) { nvs_get_u8(h, k, v); }
 static void get_u16(nvs_handle_t h, const char *k, uint16_t *v) { nvs_get_u16(h, k, v); }
@@ -64,12 +71,18 @@ esp_err_t settings_load(afr_settings_t *s)
   if (nvs_get_u32(h, K_FUEL_CUST, &u) == ESP_OK) s->fuel_custom = bitsf(u);
   get_u8(h, K_UNIT, &s->primary_unit);
   get_bool(h, K_SHOW_AFR, &s->show_afr);
-  get_milli(h, K_WARN_LEAN, &s->warn_lean);
-  get_u16(h, K_LEAN_MS, &s->warn_lean_ms);
-  get_milli(h, K_WARN_RICH, &s->warn_rich);
-  get_u16(h, K_RICH_MS, &s->warn_rich_ms);
+  get_milli(h, K_LEAN_LOAD, &s->lean_load);
+  get_u16(h, K_LEAN_LD_MS, &s->lean_load_ms);
+  get_milli(h, K_LEAN_PART, &s->lean_part);
+  get_u16(h, K_LEAN_PT_MS, &s->lean_part_ms);
+  get_milli(h, K_RICH, &s->rich);
+  get_u16(h, K_RICH_MS, &s->rich_ms);
+  get_u8(h, K_LOAD_PCT, &s->load_pct);
+  get_u8(h, K_CLOSED_PCT, &s->closed_pct);
+  if (nvs_get_u32(h, K_TPS_CLOSED, &u) == ESP_OK) s->tps_closed_v = bitsf(u);
+  if (nvs_get_u32(h, K_TPS_WOT, &u) == ESP_OK) s->tps_wot_v = bitsf(u);
   get_u16(h, K_SMOOTH, &s->smooth_ms);
-  get_u8(h, K_LOG_RATE, &s->log_rate_hz);
+  get_u8(h, K_SP_PERF, &s->spartan_perf);
   get_u8(h, K_BR_DAY, &s->bright_day);
   get_u8(h, K_BR_NIGHT, &s->bright_night);
   get_bool(h, K_NIGHT, &s->night);
@@ -95,12 +108,18 @@ esp_err_t settings_save(const afr_settings_t *s)
   nvs_set_u32(h, K_FUEL_CUST, fbits(s->fuel_custom));
   nvs_set_u8(h, K_UNIT, s->primary_unit);
   nvs_set_u8(h, K_SHOW_AFR, s->show_afr);
-  nvs_set_u16(h, K_WARN_LEAN, (uint16_t)lroundf(s->warn_lean * 1000.0f));
-  nvs_set_u16(h, K_LEAN_MS, s->warn_lean_ms);
-  nvs_set_u16(h, K_WARN_RICH, (uint16_t)lroundf(s->warn_rich * 1000.0f));
-  nvs_set_u16(h, K_RICH_MS, s->warn_rich_ms);
+  nvs_set_u16(h, K_LEAN_LOAD, milli(s->lean_load));
+  nvs_set_u16(h, K_LEAN_LD_MS, s->lean_load_ms);
+  nvs_set_u16(h, K_LEAN_PART, milli(s->lean_part));
+  nvs_set_u16(h, K_LEAN_PT_MS, s->lean_part_ms);
+  nvs_set_u16(h, K_RICH, milli(s->rich));
+  nvs_set_u16(h, K_RICH_MS, s->rich_ms);
+  nvs_set_u8(h, K_LOAD_PCT, s->load_pct);
+  nvs_set_u8(h, K_CLOSED_PCT, s->closed_pct);
+  nvs_set_u32(h, K_TPS_CLOSED, fbits(s->tps_closed_v));
+  nvs_set_u32(h, K_TPS_WOT, fbits(s->tps_wot_v));
   nvs_set_u16(h, K_SMOOTH, s->smooth_ms);
-  nvs_set_u8(h, K_LOG_RATE, s->log_rate_hz);
+  nvs_set_u8(h, K_SP_PERF, s->spartan_perf);
   nvs_set_u8(h, K_BR_DAY, s->bright_day);
   nvs_set_u8(h, K_BR_NIGHT, s->bright_night);
   nvs_set_u8(h, K_NIGHT, s->night);

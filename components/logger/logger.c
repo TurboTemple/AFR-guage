@@ -7,8 +7,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/idf_additions.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "nvs.h"
@@ -188,7 +190,9 @@ static void task(void *arg)
 esp_err_t logger_start(const char *mount_point, bool card_ok, const log_time_t *now,
                        int core, int prio)
 {
-  s_rows = xQueueCreate(LOGGER_QUEUE_LEN, sizeof(log_row_t));
+  /* Every sample is logged (about 215 Hz): a deep queue in PSRAM rides out
+   * slow SD writes (FAT updates can stall for hundreds of ms). */
+  s_rows = xQueueCreateWithCaps(LOGGER_QUEUE_LEN, sizeof(log_row_t), MALLOC_CAP_SPIRAM);
   s_meta = xQueueCreate(32, sizeof(meta_t));
   s_stopped = xSemaphoreCreateBinary();
   if (!s_rows || !s_meta || !s_stopped) return ESP_ERR_NO_MEM;

@@ -56,8 +56,9 @@ static const char *TAG = "app";
 
 static afr_settings_t s_settings;
 static lambda_range_t s_range;
-static ads1115_t s_adc;
+static ads1115_t s_adc_lambda, s_adc_aux;
 static bool s_rtc_valid;
+static bool s_perf_checked; /* response mode enforced this Spartan power-up */
 
 /* Status shown on screen, written by several tasks. */
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -74,8 +75,9 @@ static afr_config_t config_from(const afr_settings_t *s)
     .range = s_range,
     .stoich = settings_stoich(s),
     .smooth_ms = s->smooth_ms,
-    .lean = { s->warn_lean, s->warn_lean_ms },
-    .rich = { s->warn_rich, s->warn_rich_ms },
+    .alarm = settings_alarm_cfg(s),
+    .tps_closed_v = s->tps_closed_v,
+    .tps_wot_v = s->tps_wot_v,
   };
   return c;
 }
@@ -117,6 +119,12 @@ static void ui_get_status(ui_status_t *out)
   out->cal_b = c.b;
   out->cal_src = (uint8_t)src;
   out->cal_rejected = rej;
+  sampler_stats_t st = sampler_stats();
+  out->raw_conversions = st.raw_conversions;
+  out->missed = st.missed;
+  out->rdy_timeouts = st.rdy_timeouts;
+  out->spikes = st.spikes;
+  out->aux_errors = st.aux_errors;
 }
 
 static void ui_settings_changed(const afr_settings_t *s)
@@ -129,6 +137,12 @@ static void ui_settings_changed(const afr_settings_t *s)
 }
 
 static void ui_set_brightness(int pct) { bsp_display_brightness_set(pct); }
+
+static float ui_tps_volts(void)
+{
+  reading_t r;
+  return sampler_latest(&r) ? r.tps_v : NAN;
+}
 
 static void ui_set_clock(const struct tm *tm)
 {
@@ -181,7 +195,7 @@ static void on_spartan(const spartan_result_t *res)
       s_range.lam0 = i->lam0;
       s_range.lam5 = i->lam5;
       afr_config_t c = config_from(&s_settings);
-      sampler_set_config(&c, s_settings.log_rate_hz);
+      sampler_set_config(&c);
       ui_set_range(s_range);
     }
     meta_f("lambda_end_points", "%.3f,%.3f%s", (double)s_range.lam0, (double)s_range.lam5,
@@ -192,6 +206,17 @@ static void on_spartan(const spartan_result_t *res)
     if (res->perf >= 0) s_status.spartan_perf = res->perf;
     if (res->slowheat >= 0) s_status.spartan_slowheat = res->slowheat;
     taskEXIT_CRITICAL(&s_mux);
+    /* Hold the Spartan to the chosen response mode (10 ms by default),
+     * once per power-up, whatever it was left at. */
+    if (res->type == SPARTAN_REQ_GET_MODES && !s_perf_checked && res->perf >= 0) {
+      s_perf_checked = true;
+      if (res->perf != s_settings.spartan_perf) {
+        meta_f("spartan_perf", "was %d, setting %u", res->perf, s_settings.spartan_perf);
+        sp_set_perf(s_settings.spartan_perf);
+      } else {
+        meta_f("spartan_perf", "%d", res->perf);
+      }
+    }
   }
 }
 
@@ -218,7 +243,15 @@ static void on_shutdown(void)
 
 static void handle_events(EventBits_t ev)
 {
+  if (ev & AFR_EVT_ALARM) {
+    reading_t r;
+    if (sampler_latest(&r)) {
+      meta_f("alarm", "%s t_ms=%lu lambda=%.3f tps=%.0f", alarm_name((alarm_t)r.alarm),
+             (unsigned long)r.t_ms, (double)r.lambda, (double)r.tps);
+    }
+  }
   if (ev & AFR_EVT_SPARTAN_UP) {
+    s_perf_checked = false;
     meta_f("spartan_up", "t_ms=%lu", (unsigned long)(esp_timer_get_time() / 1000));
     spartan_request(&(spartan_req_t){ .type = SPARTAN_REQ_BOOT_INFO });
     spartan_request(&(spartan_req_t){ .type = SPARTAN_REQ_GET_MODES });
@@ -247,6 +280,19 @@ static void handle_events(EventBits_t ev)
   }
 }
 
+/* The alarm and TPS settings in force, as '#' lines replay.py reads. */
+static void log_alarm_settings(void)
+{
+  meta_f("lean_load", "%.2f,%u", (double)s_settings.lean_load, s_settings.lean_load_ms);
+  meta_f("lean_part", "%.2f,%u", (double)s_settings.lean_part, s_settings.lean_part_ms);
+  meta_f("rich", "%.2f,%u", (double)s_settings.rich, s_settings.rich_ms);
+  meta_f("load_pct", "%u", s_settings.load_pct);
+  meta_f("closed_pct", "%u", s_settings.closed_pct);
+  meta_f("tps_learnt", "closed %.3f V, WOT %.3f V", (double)s_settings.tps_closed_v,
+         (double)s_settings.tps_wot_v);
+  meta_f("smooth_ms", "%u", s_settings.smooth_ms);
+}
+
 static void save_pending(void)
 {
   afr_settings_t s;
@@ -260,7 +306,6 @@ static void save_pending(void)
   taskEXIT_CRITICAL(&s_mux);
   if (!due) return;
 
-  bool rate_changed = s.log_rate_hz != s_settings.log_rate_hz;
   bool fuel_changed = s.fuel != s_settings.fuel || s.fuel_custom != s_settings.fuel_custom;
   /* Calibration is not edited on screen. */
   s.cal_valid = s_settings.cal_valid;
@@ -269,8 +314,8 @@ static void save_pending(void)
   s.cal_time = s_settings.cal_time;
   s_settings = s;
   afr_config_t c = config_from(&s_settings);
-  sampler_set_config(&c, s_settings.log_rate_hz);
-  if (rate_changed) meta_f("log_rate_hz", "%u", s_settings.log_rate_hz);
+  sampler_set_config(&c);
+  log_alarm_settings();
   if (fuel_changed) meta_f("fuel", "%s %.2f", conv_fuel_name((fuel_t)s_settings.fuel),
                            (double)settings_stoich(&s_settings));
   if (settings_save(&s_settings) != ESP_OK) ESP_LOGE(TAG, "settings save failed");
@@ -305,7 +350,7 @@ static void supervisor(void)
       s = s_pending;
       taskEXIT_CRITICAL(&s_mux);
       afr_config_t c = config_from(&s);
-      sampler_set_config(&c, s.log_rate_hz);
+      sampler_set_config(&c);
       if (esp_timer_get_time() - at >= SAVE_DELAY_US) save_pending();
     }
 
@@ -351,6 +396,8 @@ void app_main(void)
     .get_reading = sampler_latest,
     .get_status = ui_get_status,
     .reset_peaks = sampler_reset_peaks,
+    .ack_alarm = sampler_ack_alarm,
+    .tps_volts = ui_tps_volts,
     .settings_changed = ui_settings_changed,
     .set_brightness = ui_set_brightness,
     .set_clock = ui_set_clock,
@@ -376,8 +423,13 @@ void app_main(void)
   }
   ESP_LOGI(TAG, "RTC %s", s_rtc_valid ? "valid" : "not set");
 
-  /* 5. ADS1115 on I2C1. Missing: FAULT "ADC not found". */
-  bool adc_ok = ads1115_init(&s_adc, I2C_NUM_1, ADC_SDA, ADC_SCL, ADS1115_ADDR) == ESP_OK;
+  /* 5. Both ADS1115s on I2C1. Either missing: FAULT. */
+  i2c_master_bus_handle_t adc_bus;
+  bool lambda_ok = false, aux_ok = false;
+  if (ads1115_bus_create(I2C_NUM_1, ADC_SDA, ADC_SCL, &adc_bus) == ESP_OK) {
+    lambda_ok = ads1115_attach(adc_bus, ADS1115_ADDR_LAMBDA, &s_adc_lambda) == ESP_OK;
+    aux_ok = ads1115_attach(adc_bus, ADS1115_ADDR_AUX, &s_adc_aux) == ESP_OK;
+  }
 
   /* 6. UART1 at 9600 8N1. */
   if (spartan_uart_init() != ESP_OK) ESP_LOGE(TAG, "UART1 init failed");
@@ -391,7 +443,7 @@ void app_main(void)
   logger_start(BSP_SD_MOUNT_POINT, card, &lt, CORE_HOUSEKEEP, 3);
   logger_meta("firmware", app->version);
   meta_f("fuel", "%s %.2f", conv_fuel_name((fuel_t)s_settings.fuel), (double)settings_stoich(&s_settings));
-  meta_f("log_rate_hz", "%u", s_settings.log_rate_hz);
+  logger_meta("sample_hz", "215 (860 SPS / 4), every sample logged");
   if (s_settings.cal_valid) {
     meta_f("cal", "STORED a=%.6e b=%.5f", (double)s_settings.cal_a, (double)s_settings.cal_b);
   } else {
@@ -399,9 +451,7 @@ void app_main(void)
   }
   meta_f("lambda_end_points", "%.3f,%.3f (default until the Spartan answers)",
          (double)s_range.lam0, (double)s_range.lam5);
-  meta_f("warn_lean", "%.2f,%u", (double)s_settings.warn_lean, s_settings.warn_lean_ms);
-  meta_f("warn_rich", "%.2f,%u", (double)s_settings.warn_rich, s_settings.warn_rich_ms);
-  meta_f("smooth_ms", "%u", s_settings.smooth_ms);
+  log_alarm_settings();
   logger_meta("supply_sense", SUPPLY_SENSE ? "yes" : "no");
   logger_meta("rtc", s_rtc_valid ? "valid" : "not set");
   logger_columns();
@@ -416,9 +466,8 @@ void app_main(void)
   /* 8. Tasks. */
   cal_coeffs_t stored = { s_settings.cal_a, s_settings.cal_b };
   afr_config_t cfg = config_from(&s_settings);
-  ESP_ERROR_CHECK(sampler_start(adc_ok ? &s_adc : NULL, &cfg,
-                                s_settings.cal_valid ? &stored : NULL,
-                                SUPPLY_SENSE, s_settings.log_rate_hz));
+  ESP_ERROR_CHECK(sampler_start(lambda_ok ? &s_adc_lambda : NULL, aux_ok ? &s_adc_aux : NULL,
+                                &cfg, s_settings.cal_valid ? &stored : NULL, SUPPLY_SENSE));
   ESP_ERROR_CHECK(spartan_task_start(on_spartan, CORE_HOUSEKEEP, 10));
   power_hooks_t ph = {
     .read_expander_pin = read_expander_pin,

@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/time.h>
 
+#include "alarms.h"
 #include "calibration.h"
 #include "gauge_state.h"
 #include "led_decoder.h"
@@ -13,17 +14,18 @@
 
 /* ---------------------------------------------------------------- Settings */
 
-typedef struct {
-  const char *name;
-  void (*fmt)(char *buf, size_t n);
-  void (*step)(int dir);
-} row_def_t;
-
 static void fx(char *b, size_t n, float v, int d)
 {
+  if (d <= 0) {
+    snprintf(b, n, "%ld", lroundf(v));
+    return;
+  }
   int scale = d == 1 ? 10 : d == 2 ? 100 : 1000;
-  long q = lroundf(v * (float)scale);
-  snprintf(b, n, "%ld.%0*ld", q / scale, d, q % scale);
+  long q = lroundf(fabsf(v) * (float)scale);
+  const char *sign = v < 0 ? "-" : "";
+  if (d == 1) snprintf(b, n, "%s%ld.%01ld", sign, q / scale, q % scale);
+  else if (d == 2) snprintf(b, n, "%s%ld.%02ld", sign, q / scale, q % scale);
+  else snprintf(b, n, "%s%ld.%03ld", sign, q / scale, q % scale);
 }
 
 static float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -38,40 +40,66 @@ static void f_unit(char *b, size_t n) { snprintf(b, n, "%s", g_ui.s.primary_unit
 static void s_unit(int d) { (void)d; g_ui.s.primary_unit = g_ui.s.primary_unit == UNIT_AFR ? UNIT_LAMBDA : UNIT_AFR; }
 static void f_show(char *b, size_t n) { snprintf(b, n, "%s", g_ui.s.show_afr ? "On" : "Off"); }
 static void s_show(int d) { (void)d; g_ui.s.show_afr = !g_ui.s.show_afr; }
-static void f_lean(char *b, size_t n) { fx(b, n, g_ui.s.warn_lean, 2); }
-static void s_lean(int d) { g_ui.s.warn_lean = clampf(g_ui.s.warn_lean + 0.01f * (float)d, 1.00f, 1.30f); }
-static void f_lean_t(char *b, size_t n) { fx(b, n, (float)g_ui.s.warn_lean_ms / 1000.0f, 1); strlcat(b, " s", n); }
-static void s_lean_t(int d) { g_ui.s.warn_lean_ms = (uint16_t)clampi(g_ui.s.warn_lean_ms + 100 * d, 200, 5000); }
-static void f_rich(char *b, size_t n) { fx(b, n, g_ui.s.warn_rich, 2); }
-static void s_rich(int d) { g_ui.s.warn_rich = clampf(g_ui.s.warn_rich + 0.01f * (float)d, 0.68f, 0.95f); }
-static void f_rich_t(char *b, size_t n) { fx(b, n, (float)g_ui.s.warn_rich_ms / 1000.0f, 1); strlcat(b, " s", n); }
-static void s_rich_t(int d) { g_ui.s.warn_rich_ms = (uint16_t)clampi(g_ui.s.warn_rich_ms + 100 * d, 200, 5000); }
+static void f_lload(char *b, size_t n) { fx(b, n, g_ui.s.lean_load, 2); }
+static void s_lload(int d) { g_ui.s.lean_load = clampf(g_ui.s.lean_load + 0.01f * (float)d, 0.75f, 1.05f); }
+static void f_lload_t(char *b, size_t n) { snprintf(b, n, "%u ms", g_ui.s.lean_load_ms); }
+static void s_lload_t(int d) { g_ui.s.lean_load_ms = (uint16_t)clampi(g_ui.s.lean_load_ms + 10 * d, 20, 1000); }
+static void f_load(char *b, size_t n) { snprintf(b, n, "%u %%", g_ui.s.load_pct); }
+static void s_load(int d) { g_ui.s.load_pct = (uint8_t)clampi(g_ui.s.load_pct + 5 * d, 10, 90); }
+static void f_lpart(char *b, size_t n) { fx(b, n, g_ui.s.lean_part, 2); }
+static void s_lpart(int d) { g_ui.s.lean_part = clampf(g_ui.s.lean_part + 0.01f * (float)d, 1.00f, 1.30f); }
+static void f_lpart_t(char *b, size_t n) { snprintf(b, n, "%u ms", g_ui.s.lean_part_ms); }
+static void s_lpart_t(int d) { g_ui.s.lean_part_ms = (uint16_t)clampi(g_ui.s.lean_part_ms + 100 * d, 100, 3000); }
+static void f_rich(char *b, size_t n) { fx(b, n, g_ui.s.rich, 2); }
+static void s_rich(int d) { g_ui.s.rich = clampf(g_ui.s.rich + 0.01f * (float)d, 0.68f, 0.85f); }
+static void f_rich_t(char *b, size_t n) { snprintf(b, n, "%u ms", g_ui.s.rich_ms); }
+static void s_rich_t(int d) { g_ui.s.rich_ms = (uint16_t)clampi(g_ui.s.rich_ms + 100 * d, 100, 3000); }
+static void f_closed(char *b, size_t n) { snprintf(b, n, "%u %%", g_ui.s.closed_pct); }
+static void s_closed(int d) { g_ui.s.closed_pct = (uint8_t)clampi(g_ui.s.closed_pct + d, 0, 20); }
+
+/* TPS learning: closed with the foot off, WOT with the pedal floored
+ * (engine off, ignition on). */
+static void fmt_volts(char *b, size_t n, float v)
+{
+  if (isnan(v)) {
+    snprintf(b, n, "not learnt");
+    return;
+  }
+  fx(b, n, v, 2);
+  strlcat(b, " V", n);
+}
+static void learn(float *dst)
+{
+  float v = g_ui.hooks.tps_volts ? g_ui.hooks.tps_volts() : NAN;
+  if (!isnan(v) && v >= TPS_V_MIN && v <= TPS_V_MAX) *dst = v;
+}
+static void f_tps_closed(char *b, size_t n) { fmt_volts(b, n, g_ui.s.tps_closed_v); }
+static void s_tps_closed(int d) { (void)d; learn(&g_ui.s.tps_closed_v); }
+static void f_tps_wot(char *b, size_t n) { fmt_volts(b, n, g_ui.s.tps_wot_v); }
+static void s_tps_wot(int d) { (void)d; learn(&g_ui.s.tps_wot_v); }
+
 static void f_smooth(char *b, size_t n) { snprintf(b, n, "%u ms", g_ui.s.smooth_ms); }
 static void s_smooth(int d) { g_ui.s.smooth_ms = (uint16_t)clampi(g_ui.s.smooth_ms + 25 * d, 0, 500); }
-static void f_rate(char *b, size_t n) { snprintf(b, n, "%u Hz", g_ui.s.log_rate_hz); }
-static void s_rate(int d)
-{
-  static const uint8_t r[] = { 10, 20, 50 };
-  int i = g_ui.s.log_rate_hz == 10 ? 0 : g_ui.s.log_rate_hz == 20 ? 1 : 2;
-  g_ui.s.log_rate_hz = r[clampi(i + d, 0, 2)];
-}
 static void f_day(char *b, size_t n) { snprintf(b, n, "%u %%", g_ui.s.bright_day); }
 static void s_day(int d) { g_ui.s.bright_day = (uint8_t)clampi(g_ui.s.bright_day + 5 * d, 5, 100); }
 static void f_night(char *b, size_t n) { snprintf(b, n, "%u %%", g_ui.s.bright_night); }
 static void s_night(int d) { g_ui.s.bright_night = (uint8_t)clampi(g_ui.s.bright_night + 5 * d, 5, 100); }
 
-/* Spartan modes live in the Spartan, not in NVS. */
+/* Response mode is a setting, enforced at every Spartan power-up; the
+ * value shown is what the Spartan reports. */
 static void f_perf(char *b, size_t n)
 {
   static const char *const t[] = { "20 ms", "10 ms", "Lean" };
-  int p = g_ui.st.spartan_perf;
-  snprintf(b, n, "%s", p >= 0 && p <= 2 ? t[p] : "?");
+  int want = g_ui.s.spartan_perf, is = g_ui.st.spartan_perf;
+  /* A star: the Spartan has not taken it yet. */
+  snprintf(b, n, "%s%s", t[want <= 2 ? want : 1], is >= 0 && is != want ? "*" : "");
 }
 static void s_perf(int d)
 {
-  int p = g_ui.st.spartan_perf < 0 ? 0 : g_ui.st.spartan_perf;
-  if (g_ui.hooks.spartan_set_perf) g_ui.hooks.spartan_set_perf(wrap(p + d, 3));
+  g_ui.s.spartan_perf = (uint8_t)wrap(g_ui.s.spartan_perf + d, 3);
+  if (g_ui.hooks.spartan_set_perf) g_ui.hooks.spartan_set_perf(g_ui.s.spartan_perf);
 }
+/* Heat-up mode lives in the Spartan only. */
 static void f_heat(char *b, size_t n)
 {
   int h = g_ui.st.spartan_slowheat;
@@ -84,24 +112,36 @@ static void s_heat(int d)
   if (g_ui.hooks.spartan_set_slowheat) g_ui.hooks.spartan_set_slowheat(h);
 }
 
+typedef enum { ROW_STEP, ROW_LEARN, ROW_SPARTAN } row_kind_t;
+typedef struct {
+  const char *name;
+  void (*fmt)(char *buf, size_t n);
+  void (*step)(int dir);
+  row_kind_t kind;
+} row_def_t;
+
 static const row_def_t k_rows[] = {
-  { "Fuel", f_fuel, s_fuel },
-  { "Custom stoich", f_custom, s_custom },
-  { "Main unit", f_unit, s_unit },
-  { "AFR line", f_show, s_show },
-  { "Lean warn \xCE\xBB", f_lean, s_lean },
-  { "Lean warn time", f_lean_t, s_lean_t },
-  { "Rich warn \xCE\xBB", f_rich, s_rich },
-  { "Rich warn time", f_rich_t, s_rich_t },
-  { "Smoothing", f_smooth, s_smooth },
-  { "Log rate", f_rate, s_rate },
-  { "Day bright", f_day, s_day },
-  { "Night bright", f_night, s_night },
-  { "Spartan resp.", f_perf, s_perf },
-  { "Spartan heat-up", f_heat, s_heat },
+  { "Lean at load \xCE\xBB", f_lload, s_lload, ROW_STEP },
+  { "Lean at load for", f_lload_t, s_lload_t, ROW_STEP },
+  { "Load from throttle", f_load, s_load, ROW_STEP },
+  { "Lean part thr. \xCE\xBB", f_lpart, s_lpart, ROW_STEP },
+  { "Lean part thr. for", f_lpart_t, s_lpart_t, ROW_STEP },
+  { "Rich limit \xCE\xBB", f_rich, s_rich, ROW_STEP },
+  { "Rich for", f_rich_t, s_rich_t, ROW_STEP },
+  { "Closed throttle", f_closed, s_closed, ROW_STEP },
+  { "TPS closed", f_tps_closed, s_tps_closed, ROW_LEARN },
+  { "TPS WOT", f_tps_wot, s_tps_wot, ROW_LEARN },
+  { "Fuel", f_fuel, s_fuel, ROW_STEP },
+  { "Custom stoich", f_custom, s_custom, ROW_STEP },
+  { "Main unit", f_unit, s_unit, ROW_STEP },
+  { "AFR line", f_show, s_show, ROW_STEP },
+  { "Display smoothing", f_smooth, s_smooth, ROW_STEP },
+  { "Spartan response", f_perf, s_perf, ROW_STEP },
+  { "Spartan heat-up", f_heat, s_heat, ROW_SPARTAN },
+  { "Day bright", f_day, s_day, ROW_STEP },
+  { "Night bright", f_night, s_night, ROW_STEP },
 };
 #define N_ROWS (sizeof k_rows / sizeof k_rows[0])
-#define ROW_SPARTAN_FIRST 12
 
 static lv_obj_t *s_values[N_ROWS];
 
@@ -111,7 +151,7 @@ static void step_cb(lv_event_t *e)
   int row = (int)(code >> 1);
   int dir = (code & 1) ? 1 : -1;
   k_rows[row].step(dir);
-  if (row < ROW_SPARTAN_FIRST) ui_notify_settings();
+  if (k_rows[row].kind != ROW_SPARTAN) ui_notify_settings();
   ui_settings_refresh();
 }
 
@@ -162,6 +202,11 @@ void ui_settings_create(void)
     s_values[i] = ui_label(row, &afr_font_24, COL_TEXT, "");
     lv_obj_align(s_values[i], LV_ALIGN_LEFT_MID, 0, 12);
 
+    if (k_rows[i].kind == ROW_LEARN) {
+      lv_obj_t *b = ui_button(row, "Learn", 120, 44, step_cb, (void *)(intptr_t)((i << 1) | 1));
+      lv_obj_align(b, LV_ALIGN_RIGHT_MID, 0, 0);
+      continue;
+    }
     lv_obj_t *minus = ui_button(row, "-", 56, 44, step_cb, (void *)(intptr_t)(i << 1));
     lv_obj_align(minus, LV_ALIGN_RIGHT_MID, -64, 0);
     lv_obj_t *plus = ui_button(row, "+", 56, 44, step_cb, (void *)(intptr_t)((i << 1) | 1));
@@ -250,7 +295,7 @@ void ui_service_refresh(void)
   const reading_t *r = &g_ui.r;
   static const char *const src[] = { "NOMINAL", "STORED", "FRESH" };
   static const char *const logs[] = { "off", "OK", "no card", "error" };
-  char v[16], lam[16], a[16], b[16], l0[16], l5[16], sup[16];
+  char v[16], lam[16], a[16], b[16], l0[16], l5[16], sup[16], tv[16], tp[16];
 
   fx(v, sizeof v, r->v_out, 3);
   if (isnan(r->lambda)) snprintf(lam, sizeof lam, "-");
@@ -259,10 +304,14 @@ void ui_service_refresh(void)
   fx(b, sizeof b, st->cal_b * 1000.0f, 1);
   fx(l0, sizeof l0, g_ui.range.lam0, 3);
   fx(l5, sizeof l5, g_ui.range.lam5, 3);
+  if (isnan(r->tps_v)) snprintf(tv, sizeof tv, "-");
+  else fx(tv, sizeof tv, r->tps_v, 2);
+  if (isnan(r->tps)) snprintf(tp, sizeof tp, "%s", (r->flags & FLAG_TPS_FAULT) ? "FAULT" : "not learnt");
+  else { fx(tp, sizeof tp, r->tps, 0); strlcat(tp, " %", sizeof tp); }
   if (isnan(r->supply_v)) snprintf(sup, sizeof sup, "not fitted");
   else { fx(sup, sizeof sup, r->supply_v, 1); strlcat(sup, " V", sizeof sup); }
 
-  char t[640];
+  char t[900];
   snprintf(t, sizeof t,
            "Gauge %s\n"
            "Spartan FW %s  HW %s\n"
@@ -271,7 +320,11 @@ void ui_service_refresh(void)
            "Cal %s%s\na %s uV/code, b %s mV\n"
            "State %s  LED %s\n"
            "v_out %s V  \xCE\xBB %s\n"
+           "TPS %s V  %s\n"
+           "Alarm %s\n"
            "Supply %s\n"
+           "ADC %lu conv, %lu missed, %lu gaps\n"
+           "%lu spikes, %lu aux errors\n"
            "SD %s %s\n"
            "Clock %s  Battery %s",
            st->gauge_fw,
@@ -281,7 +334,10 @@ void ui_service_refresh(void)
            st->cal_src < 3 ? src[st->cal_src] : "?", st->cal_rejected ? " (last fit rejected)" : "",
            a, b,
            gs_state_name(r->state), led_pattern_name((led_pattern_t)r->led_pattern),
-           v, lam, sup,
+           v, lam, tv, tp, alarm_name((alarm_t)r->alarm), sup,
+           (unsigned long)st->raw_conversions, (unsigned long)st->missed,
+           (unsigned long)st->rdy_timeouts, (unsigned long)st->spikes,
+           (unsigned long)st->aux_errors,
            st->log_state < 4 ? logs[st->log_state] : "?", st->log_name,
            st->rtc_valid ? "set" : "NOT SET", st->battery ? "yes" : "no");
   if (strcmp(t, lv_label_get_text(s_info)) != 0) lv_label_set_text(s_info, t);

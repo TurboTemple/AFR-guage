@@ -19,7 +19,7 @@
 extern "C" {
 #endif
 
-#define LOGGER_QUEUE_LEN 256
+#define LOGGER_QUEUE_LEN 2048 /* about 9.5 s at 215 Hz */
 
 typedef enum {
   LOG_STATE_OFF,      /* not started */
@@ -42,7 +42,7 @@ typedef struct {
  * LOG_STATE_NO_CARD (the gauge runs on without logging). */
 esp_err_t logger_start(const char *mount_point, bool card_ok, const log_time_t *now,
                        int core, int prio);
-/* The 256-slot row queue; the sampler sends with zero wait. */
+/* The row queue; the sampler sends with zero wait. */
 QueueHandle_t logger_queue(void);
 /* Append a '#' header line ("key=value"). Safe from any task. */
 void logger_meta(const char *key, const char *value);

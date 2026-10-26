@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "gauge_state.h"
+#include "alarms.h"
 #include "led_decoder.h"
 
 size_t log_fmt_fixed(char *buf, size_t n, float v, int decimals)
@@ -33,14 +34,9 @@ size_t log_fmt_fixed(char *buf, size_t n, float v, int decimals)
   return len > 0 && (size_t)len < n ? (size_t)len : 0;
 }
 
-char log_warn_char(warn_t w)
-{
-  return w == WARN_LEAN ? 'L' : w == WARN_RICH ? 'R' : '0';
-}
-
 size_t log_format_row(char *buf, size_t n, const reading_t *r, uint32_t dropped)
 {
-  char lam[16], afr[16], v[16], sup[16];
+  char lam[16], afr[16], v[16], sup[16], tps[16];
   bool has = gs_has_lambda(r->state);
   if (has) {
     log_fmt_fixed(lam, sizeof lam, r->lambda, 4);
@@ -50,10 +46,11 @@ size_t log_format_row(char *buf, size_t n, const reading_t *r, uint32_t dropped)
   }
   log_fmt_fixed(v, sizeof v, r->v_out, 4);
   log_fmt_fixed(sup, sizeof sup, r->supply_v, 2);
-  int len = snprintf(buf, n, "%lu,%s,%s,%s,%s,%s,%s,%c,%lu\n",
+  log_fmt_fixed(tps, sizeof tps, r->tps, 1);
+  int len = snprintf(buf, n, "%lu,%s,%s,%s,%s,%s,%s,%s,%c,%lu\n",
                      (unsigned long)r->t_ms, gs_state_name(r->state), lam, afr, v,
-                     led_pattern_name((led_pattern_t)r->led_pattern), sup,
-                     log_warn_char((warn_t)r->warn), (unsigned long)dropped);
+                     led_pattern_name((led_pattern_t)r->led_pattern), tps, sup,
+                     alarm_char((alarm_t)r->alarm), (unsigned long)dropped);
   return len > 0 && (size_t)len < n ? (size_t)len : 0;
 }
 

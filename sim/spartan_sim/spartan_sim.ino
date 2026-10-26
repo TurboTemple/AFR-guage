@@ -6,15 +6,17 @@
  *
  *   MCP4725 DAC (VDD 5 V, SDA A4, SCL A5) VOUT -> gauge green input
  *   D7 -> 1 k -> gauge blue input        (heater-status LED line)
+ *   D9 -> 10 k -> 10 uF to GND -> gauge TPS input   (throttle, PWM filtered)
  *   TX (D1) -> gauge orange input         (Spartan TX, 5 V, 9600 8N1)
  *   RX (D0) <- gauge yellow (GPIO16)      (Spartan RX)
- *   GND -> gauge ground (the Spartan's black wire)
+ *   GND -> gauge ground (the Spartan's black wire) and the ground-sense input
  *
  * Unplug the gauge's UART wires while uploading: D0/D1 are the USB serial.
  *
  * At power-up (reset) it plays the start-up sequencer, 1.666 V for 5 s then
  * 3.333 V for 5 s, then a warm-up with the LED blinking slow, then loops a
- * recorded-style drive. The LED steps through every blink pattern. It
+ * drive with two passes, a lean-out at full throttle and the lift-off fuel
+ * cuts, plus the throttle signal. The LED steps through every pattern. It
  * answers the GET commands the gauge sends at boot and the SET commands
  * from its settings and service screens.
  */
@@ -22,6 +24,9 @@
 
 #define DAC_ADDR 0x60   /* MCP4725 with A0 low; 0x62 on some boards */
 #define LED_PIN  7
+#define TPS_PIN  9      /* PWM; the RC filter makes it a voltage */
+#define TPS_CLOSED_V 0.6f
+#define TPS_WOT_V    4.4f
 
 /* Answers to the boot queries. */
 static const char *FW = "1.03";
@@ -37,21 +42,25 @@ struct pattern { unsigned period, on; };
 static const pattern P_STEADY = { 0, 1 }, P_SLOW = { 2000, 250 }, P_FAST = { 500, 250 },
                      P_VSLOW = { 8000, 250 }, P_OFF = { 0, 0 };
 
-/* A drive: duration, lambda (0 = hold volts), volts, LED pattern. */
-struct seg { unsigned long ms; float lambda; float volts; pattern led; };
+/* A drive: duration, lambda (0 = hold volts), volts, LED pattern, throttle %. */
+struct seg { unsigned long ms; float lambda; float volts; pattern led; float tps; };
 static const seg drive[] = {
-  { 20000, 0,    1.20f, P_SLOW },   /* warm-up, output undocumented */
-  { 30000, 1.00f, 0,    P_STEADY }, /* warm idle, closed loop */
-  { 4000,  0.82f, 0,    P_STEADY }, /* full throttle, rich */
-  { 15000, 1.00f, 0,    P_STEADY }, /* cruise */
-  { 6000,  0,    5.00f, P_STEADY }, /* overrun fuel cut: lean rail */
-  { 3000,  1.15f, 0,    P_STEADY }, /* lean stumble: lean warning */
-  { 10000, 0.99f, 0,    P_STEADY },
-  { 3000,  0,    0.00f, P_STEADY }, /* rich rail: rich warning */
-  { 5000,  1.00f, 0,    P_FAST },   /* sensor too hot */
-  { 5000,  1.00f, 0,    P_STEADY },
-  { 12000, 1.00f, 0,    P_VSLOW },  /* waiting for exhaust heat */
-  { 5000,  1.00f, 0,    P_SLOW },   /* heating */
+  { 20000, 0,    1.20f, P_SLOW,   0 },   /* warm-up, output undocumented */
+  { 20000, 1.00f, 0,    P_STEADY, 0 },   /* warm idle, closed loop */
+  { 1500,  0.70f, 0,    P_STEADY, 12 },  /* staging, rich: rich alarm */
+  { 9000,  0.82f, 0,    P_STEADY, 100 }, /* clean pass */
+  { 6000,  0,    5.00f, P_STEADY, 0 },   /* lift: fuel cut, no alarm */
+  { 20000, 1.00f, 0,    P_STEADY, 0 },
+  { 5000,  0.82f, 0,    P_STEADY, 100 }, /* second pass... */
+  { 400,   0.96f, 0,    P_STEADY, 100 }, /* ...leans out: LEAN AT LOAD */
+  { 2000,  0.83f, 0,    P_STEADY, 100 },
+  { 5000,  0,    5.00f, P_STEADY, 0 },
+  { 3000,  0,    0.00f, P_STEADY, 5 },   /* rich rail: rich alarm */
+  { 5000,  1.00f, 0,    P_FAST,   0 },   /* sensor too hot */
+  { 5000,  1.00f, 0,    P_STEADY, 20 },
+  { 3000,  1.15f, 0,    P_STEADY, 20 },  /* lean at part throttle: LEAN */
+  { 12000, 1.00f, 0,    P_VSLOW,  0 },   /* waiting for exhaust heat */
+  { 5000,  1.00f, 0,    P_SLOW,   0 },   /* heating */
 };
 #define N_SEGS (sizeof drive / sizeof drive[0])
 
@@ -121,6 +130,12 @@ static void poll_uart()
   }
 }
 
+static void tps(float pct)
+{
+  float v = TPS_CLOSED_V + (TPS_WOT_V - TPS_CLOSED_V) * pct / 100.0f;
+  analogWrite(TPS_PIN, (int)(v / 5.0f * 255.0f + 0.5f));
+}
+
 static void hold(unsigned long ms, float v, const pattern &p)
 {
   unsigned long start = millis();
@@ -136,6 +151,8 @@ static void hold(unsigned long ms, float v, const pattern &p)
 void setup()
 {
   pinMode(LED_PIN, OUTPUT);
+  pinMode(TPS_PIN, OUTPUT);
+  tps(0);
   Serial.begin(9600);
   Wire.begin();
   Wire.setClock(400000);
@@ -150,6 +167,7 @@ void loop()
   for (unsigned i = 0; i < N_SEGS; i++) {
     const seg &s = drive[i];
     float v = s.lambda > 0 ? volts_for(s.lambda) : s.volts;
+    tps(s.tps);
     hold(s.ms, v, s.led);
   }
 }

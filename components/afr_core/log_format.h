@@ -14,8 +14,8 @@
 extern "C" {
 #endif
 
-#define LOG_COLUMNS "t_ms,state,lambda,afr,v_out,led,supply_v,warn,dropped"
-#define LOG_ROW_MAX 96
+#define LOG_COLUMNS "t_ms,state,lambda,afr,v_out,led,tps,supply_v,alarm,dropped"
+#define LOG_ROW_MAX 112
 
 /* Fixed-point formatting: newlib's float printf is slow and large. Writes
  * nothing for NAN. Returns the length written. */
@@ -38,8 +38,6 @@ uint32_t log_parse_seq(const char *name);
  * and len if the chunk holds no newline. */
 size_t log_partial_tail(const char *tail, size_t len);
 
-/* The warn column: '0', 'L' or 'R'. */
-char log_warn_char(warn_t w);
 
 #ifdef __cplusplus
 }

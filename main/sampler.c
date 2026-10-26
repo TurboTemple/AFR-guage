@@ -1,5 +1,10 @@
 #include "sampler.h"
 
+#include <math.h>
+#include <string.h>
+
+#include "driver/gpio.h"
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
@@ -10,123 +15,244 @@
 
 static const char *TAG = "sampler";
 
-#define SAMPLER_CORE 1
-#define SAMPLER_PRIO 20
+#define SAMPLER_CORE    1
+#define SAMPLER_PRIO    20
+#define AUX_PRIO        18
+#define RDY_TIMEOUT_MS  5
+#define REARM_MS        50
+#define AUX_PERIOD_MS   5   /* TPS every tick: 200 Hz */
+#define AUX_LED_EVERY   4   /* 50 Hz */
+#define AUX_SUPPLY_EVERY 20 /* 10 Hz */
 
-static ads1115_t *s_adc;
+static ads1115_t *s_lambda, *s_aux;
 static afr_pipeline_t s_p;
+static decim_t s_dec;
 static TaskHandle_t s_task;
 static QueueHandle_t s_ui_q;
 static EventGroupHandle_t s_events;
+static volatile int64_t s_rdy_us;
 
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static afr_config_t s_pending_cfg;
-static bool s_cfg_dirty;
-static bool s_reset_peaks;
-static uint8_t s_log_rate;
+static bool s_cfg_dirty, s_reset_peaks, s_ack;
 static cal_coeffs_t s_cal_copy;
 static cal_source_t s_cal_src_copy;
 static bool s_cal_rej_copy;
+static sampler_stats_t s_stats;
 
-static void timer_cb(void *arg)
+/* Mailbox from the aux task. */
+typedef struct {
+  uint32_t t_ms;
+  int16_t  code;
+} led_sample_t;
+static QueueHandle_t s_led_q;
+static bool s_tps_new, s_tps_ok, s_sup_new, s_sup_ok;
+static int16_t s_tps_code, s_sup_code;
+
+static void IRAM_ATTR rdy_isr(void *arg)
 {
   (void)arg;
-  xTaskNotifyGive(s_task);
+  s_rdy_us = esp_timer_get_time();
+  BaseType_t hp = pdFALSE;
+  vTaskNotifyGiveFromISR(s_task, &hp);
+  portYIELD_FROM_ISR(hp);
 }
 
-static void task(void *arg)
+static uint32_t now_ms(void)
+{
+  return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
+/* Settings, acknowledgements and second-ADC values, between samples. */
+static void take_inputs(void)
+{
+  afr_config_t cfg;
+  bool dirty, reset, ack, tps_new, tps_ok, sup_new, sup_ok;
+  int16_t tps_code, sup_code;
+  taskENTER_CRITICAL(&s_mux);
+  dirty = s_cfg_dirty;
+  if (dirty) cfg = s_pending_cfg;
+  reset = s_reset_peaks;
+  ack = s_ack;
+  tps_new = s_tps_new;
+  tps_ok = s_tps_ok;
+  tps_code = s_tps_code;
+  sup_new = s_sup_new;
+  sup_ok = s_sup_ok;
+  sup_code = s_sup_code;
+  s_cfg_dirty = s_reset_peaks = s_ack = s_tps_new = s_sup_new = false;
+  taskEXIT_CRITICAL(&s_mux);
+
+  if (dirty) afr_pipeline_set_config(&s_p, &cfg);
+  if (reset) afr_pipeline_reset_peaks(&s_p);
+  if (ack) afr_pipeline_ack_alarm(&s_p);
+  if (tps_new) afr_pipeline_tps_sample(&s_p, tps_ok, tps_code);
+  if (sup_new) afr_pipeline_supply_sample(&s_p, sup_ok, sup_code);
+  led_sample_t l;
+  while (xQueueReceive(s_led_q, &l, 0) == pdTRUE) afr_pipeline_led_sample(&s_p, l.t_ms, l.code);
+}
+
+static void publish(const reading_t *r, QueueHandle_t log_q, uint32_t *dropped)
+{
+  xQueueOverwrite(s_ui_q, r);
+  if (log_q) {
+    log_row_t row = { .r = *r, .dropped = *dropped };
+    if (xQueueSend(log_q, &row, 0) == pdTRUE) *dropped = 0;
+    else (*dropped)++;
+  }
+  uint8_t ev = afr_pipeline_take_events(&s_p);
+  if (ev) {
+    taskENTER_CRITICAL(&s_mux);
+    s_cal_copy = s_p.cal;
+    s_cal_src_copy = s_p.cal_src;
+    s_cal_rej_copy = s_p.cal_rejected;
+    taskEXIT_CRITICAL(&s_mux);
+    xEventGroupSetBits(s_events, ev);
+  }
+}
+
+static void sampler_task(void *arg)
 {
   (void)arg;
   esp_task_wdt_add(NULL);
   QueueHandle_t log_q = logger_queue();
-  uint32_t tick = 0, dropped = 0;
+  uint32_t dropped = 0, last_fail_ms = 0, last_rearm_ms = 0;
   reading_t r;
 
   for (;;) {
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    uint32_t n = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(s_lambda ? RDY_TIMEOUT_MS : 5));
     esp_task_wdt_reset();
+    take_inputs();
+    uint32_t t = now_ms();
 
-    uint8_t rate;
-    bool reset;
-    afr_config_t cfg;
-    bool dirty;
-    taskENTER_CRITICAL(&s_mux);
-    dirty = s_cfg_dirty;
-    if (dirty) cfg = s_pending_cfg;
-    s_cfg_dirty = false;
-    reset = s_reset_peaks;
-    s_reset_peaks = false;
-    rate = s_log_rate;
-    taskEXIT_CRITICAL(&s_mux);
-    if (dirty) afr_pipeline_set_config(&s_p, &cfg);
-    if (reset) afr_pipeline_reset_peaks(&s_p);
+    if (!s_lambda) {
+      /* No lambda ADC: keep the UI and log fed with the FAULT state. */
+      afr_pipeline_step_raw(&s_p, t, false, 0.0f, &r);
+      publish(&r, log_q, &dropped);
+      continue;
+    }
 
-    afr_raw_t in = { .t_ms = (uint32_t)(esp_timer_get_time() / 1000) };
-    if (s_adc) {
-      in.lam_ok = ads1115_read(s_adc, 0, &in.lam_code) == ESP_OK;
-      if (tick % 4 == 0) {
-        in.led_new = ads1115_read(s_adc, 1, &in.led_code) == ESP_OK;
-      } else if (s_p.supply_fitted && tick % 20 == 10) {
-        in.supply_new = ads1115_read(s_adc, 2, &in.supply_code) == ESP_OK;
+    if (n == 0) {
+      /* No conversion-ready pulse: count it as a failed sample (about one
+       * per sample period) and re-arm the ADC in case it reset. */
+      s_stats.rdy_timeouts++;
+      decim_reset(&s_dec);
+      if (t - last_fail_ms >= AFR_SAMPLE_MS) {
+        last_fail_ms = t;
+        afr_pipeline_step_raw(&s_p, t, false, 0.0f, &r);
+        publish(&r, log_q, &dropped);
       }
+      if (t - last_rearm_ms >= REARM_MS) {
+        last_rearm_ms = t;
+        ads1115_start_continuous_diff01(s_lambda);
+      }
+      continue;
     }
-    afr_pipeline_step_raw(&s_p, &in, &r);
+    if (n > 1) s_stats.missed += n - 1;
+    s_stats.raw_conversions++;
 
-    xQueueOverwrite(s_ui_q, &r);
-
-    uint32_t decim = 1000u / AFR_SAMPLE_MS / (rate ? rate : 20);
-    if (log_q && tick % decim == 0) {
-      log_row_t row = { .r = r, .dropped = dropped };
-      if (xQueueSend(log_q, &row, 0) == pdTRUE) dropped = 0;
-      else dropped++;
+    uint64_t t_us = (uint64_t)s_rdy_us;
+    int16_t code;
+    if (ads1115_read_latest(s_lambda, &code) != ESP_OK) {
+      decim_reset(&s_dec);
+      afr_pipeline_step_raw(&s_p, t, false, 0.0f, &r);
+      publish(&r, log_q, &dropped);
+      continue;
     }
+    float mean;
+    uint64_t t_mid_us;
+    if (decim_feed(&s_dec, code, t_us, &mean, &t_mid_us)) {
+      s_stats.spikes = s_dec.spikes;
+      afr_pipeline_step_raw(&s_p, (uint32_t)(t_mid_us / 1000u), true, mean, &r);
+      publish(&r, log_q, &dropped);
+    }
+  }
+}
 
-    uint8_t ev = afr_pipeline_take_events(&s_p);
-    if (ev) {
+static void aux_task(void *arg)
+{
+  (void)arg;
+  TickType_t wake = xTaskGetTickCount();
+  uint32_t tick = 0;
+  for (;;) {
+    vTaskDelayUntil(&wake, pdMS_TO_TICKS(AUX_PERIOD_MS));
+    int16_t code;
+    bool ok = ads1115_read(s_aux, 1, &code) == ESP_OK;
+    if (!ok) s_stats.aux_errors++;
+    taskENTER_CRITICAL(&s_mux);
+    s_tps_new = true;
+    s_tps_ok = ok;
+    s_tps_code = code;
+    taskEXIT_CRITICAL(&s_mux);
+
+    if (tick % AUX_LED_EVERY == 0) {
+      led_sample_t l = { .t_ms = now_ms() };
+      if (ads1115_read(s_aux, 0, &l.code) == ESP_OK) xQueueSend(s_led_q, &l, 0);
+      else s_stats.aux_errors++;
+    }
+    if (s_p.supply_fitted && tick % AUX_SUPPLY_EVERY == 2) {
+      ok = ads1115_read(s_aux, 2, &code) == ESP_OK;
       taskENTER_CRITICAL(&s_mux);
-      s_cal_copy = s_p.cal;
-      s_cal_src_copy = s_p.cal_src;
-      s_cal_rej_copy = s_p.cal_rejected;
+      s_sup_new = true;
+      s_sup_ok = ok;
+      s_sup_code = code;
       taskEXIT_CRITICAL(&s_mux);
-      xEventGroupSetBits(s_events, ev);
     }
     tick++;
   }
 }
 
-esp_err_t sampler_start(ads1115_t *adc, const afr_config_t *cfg, const cal_coeffs_t *stored,
-                        bool supply_fitted, uint8_t log_rate_hz)
+esp_err_t sampler_start(ads1115_t *lambda, ads1115_t *aux, const afr_config_t *cfg,
+                        const cal_coeffs_t *stored, bool supply_fitted)
 {
-  s_adc = adc;
-  s_log_rate = log_rate_hz;
-  uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+  s_lambda = lambda;
+  s_aux = aux;
+  uint32_t now = now_ms();
   afr_pipeline_init(&s_p, cfg, stored, supply_fitted, AFR_SAMPLE_MS, now);
+  decim_init(&s_dec, SPIKE_CODES);
   s_cal_copy = s_p.cal;
   s_cal_src_copy = s_p.cal_src;
-  if (!adc) afr_pipeline_fault(&s_p, FAULT_ADC_NOT_FOUND, now);
+  if (!lambda) afr_pipeline_fault(&s_p, FAULT_ADC_NOT_FOUND, now);
+  else if (!aux) afr_pipeline_fault(&s_p, FAULT_AUX_NOT_FOUND, now);
   afr_pipeline_start(&s_p, now);
 
   s_ui_q = xQueueCreate(1, sizeof(reading_t));
+  s_led_q = xQueueCreate(16, sizeof(led_sample_t));
   s_events = xEventGroupCreate();
-  if (!s_ui_q || !s_events) return ESP_ERR_NO_MEM;
+  if (!s_ui_q || !s_led_q || !s_events) return ESP_ERR_NO_MEM;
 
-  if (xTaskCreatePinnedToCore(task, "sampler", 4096, NULL, SAMPLER_PRIO, &s_task,
+  if (xTaskCreatePinnedToCore(sampler_task, "sampler", 4096, NULL, SAMPLER_PRIO, &s_task,
                               SAMPLER_CORE) != pdPASS) {
     return ESP_ERR_NO_MEM;
   }
-  const esp_timer_create_args_t ta = { .callback = timer_cb, .name = "sampler" };
-  esp_timer_handle_t timer;
-  ESP_ERROR_CHECK(esp_timer_create(&ta, &timer));
-  ESP_LOGI(TAG, "%s, supply sense %s", adc ? "running at 200 Hz" : "no ADC", supply_fitted ? "on" : "off");
-  return esp_timer_start_periodic(timer, AFR_SAMPLE_MS * 1000);
+  if (aux && xTaskCreatePinnedToCore(aux_task, "aux", 3072, NULL, AUX_PRIO, NULL,
+                                     SAMPLER_CORE) != pdPASS) {
+    return ESP_ERR_NO_MEM;
+  }
+  if (!lambda) return ESP_OK;
+
+  /* ALERT/RDY is open drain: pull-up, falling edge. The board's ISR
+   * service may already be installed by the BSP. */
+  gpio_config_t io = {
+    .pin_bit_mask = 1ULL << SAMPLER_RDY_GPIO,
+    .mode = GPIO_MODE_INPUT,
+    .pull_up_en = GPIO_PULLUP_ENABLE,
+    .intr_type = GPIO_INTR_NEGEDGE,
+  };
+  ESP_ERROR_CHECK(gpio_config(&io));
+  esp_err_t err = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+  if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return err;
+  ESP_ERROR_CHECK(gpio_isr_handler_add(SAMPLER_RDY_GPIO, rdy_isr, NULL));
+  ESP_LOGI(TAG, "lambda ADC continuous at %u SPS, decimated by %d; supply sense %s",
+           LAMBDA_RAW_HZ, DECIM_N, supply_fitted ? "on" : "off");
+  return ads1115_start_continuous_diff01(lambda);
 }
 
-void sampler_set_config(const afr_config_t *cfg, uint8_t log_rate_hz)
+void sampler_set_config(const afr_config_t *cfg)
 {
   taskENTER_CRITICAL(&s_mux);
   s_pending_cfg = *cfg;
   s_cfg_dirty = true;
-  s_log_rate = log_rate_hz;
   taskEXIT_CRITICAL(&s_mux);
 }
 
@@ -134,6 +260,13 @@ void sampler_reset_peaks(void)
 {
   taskENTER_CRITICAL(&s_mux);
   s_reset_peaks = true;
+  taskEXIT_CRITICAL(&s_mux);
+}
+
+void sampler_ack_alarm(void)
+{
+  taskENTER_CRITICAL(&s_mux);
+  s_ack = true;
   taskEXIT_CRITICAL(&s_mux);
 }
 
@@ -154,4 +287,9 @@ void sampler_cal(cal_coeffs_t *cal, cal_source_t *src, bool *rejected)
   *src = s_cal_src_copy;
   *rejected = s_cal_rej_copy;
   taskEXIT_CRITICAL(&s_mux);
+}
+
+sampler_stats_t sampler_stats(void)
+{
+  return s_stats;
 }

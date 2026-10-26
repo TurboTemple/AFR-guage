@@ -55,7 +55,7 @@ gauge_state_t gs_update(gauge_sm_t *sm, const gs_input_t *in)
   const uint32_t t = in->t_ms;
 
   if (sm->state == ST_BOOT) return sm->state;
-  if (sm->state == ST_FAULT && sm->fault == FAULT_ADC_NOT_FOUND) return sm->state;
+  if (sm->state == ST_FAULT && sm->fault != FAULT_I2C) return sm->state;
 
   if (!in->adc_ok) {
     sm->good_run = false;
@@ -161,7 +161,8 @@ const char *gs_fault_text(fault_reason_t f)
 {
   switch (f) {
   case FAULT_I2C: return "ADC read failed";
-  case FAULT_ADC_NOT_FOUND: return "ADC not found";
+  case FAULT_ADC_NOT_FOUND: return "Lambda ADC not found";
+  case FAULT_AUX_NOT_FOUND: return "LED/TPS ADC not found";
   default: return "";
   }
 }

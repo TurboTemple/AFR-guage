@@ -1,6 +1,7 @@
 # afr_core builds as an ESP-IDF component, or as a plain static library for
 # the host tests (test/host).
 set(AFR_CORE_SRCS
+  alarms.c
   afr_settings.c
   calibration.c
   conversion.c
