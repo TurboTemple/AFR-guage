@@ -14,7 +14,7 @@ static uint32_t t;
 static void reset(void)
 {
   alarms_reset(&a);
-  cfg = alarms_default_cfg(); /* load 0.90/100 ms, part 1.10/500 ms, rich 0.72/500 ms */
+  cfg = alarms_default_cfg(); /* load 0.92/100 ms, part 1.10/500 ms, rich 0.72/500 ms */
   t = 0;
 }
 
@@ -101,9 +101,9 @@ static void test_clear_hysteresis(void)
   reset();
   hold(200, ST_READY, 0.95f, 90.0f, ALARM_LEAN_LOAD);
   TEST_ASSERT_EQUAL_INT(ALARM_LEAN_LOAD, now());
-  hold(50, ST_READY, 0.885f, 90.0f, ALARM_NONE);
-  TEST_ASSERT_EQUAL_INT(ALARM_LEAN_LOAD, now()); /* 0.885 is not 0.02 inside */
-  hold(5, ST_READY, 0.875f, 90.0f, ALARM_NONE);
+  hold(50, ST_READY, 0.905f, 90.0f, ALARM_NONE);
+  TEST_ASSERT_EQUAL_INT(ALARM_LEAN_LOAD, now()); /* 0.905 is not 0.02 inside */
+  hold(5, ST_READY, 0.895f, 90.0f, ALARM_NONE);
   TEST_ASSERT_EQUAL_INT(ALARM_NONE, now());
 }
 
@@ -113,6 +113,11 @@ static void test_short_blip_ignored(void)
   for (int i = 0; i < 20; i++) {
     hold(80, ST_READY, 0.95f, 90.0f, ALARM_NONE); /* under the 100 ms hold */
     hold(20, ST_READY, 0.85f, 90.0f, ALARM_NONE);
+  }
+  /* A healthy NA tune at 0.89-0.91 under load never alarms. */
+  for (int i = 0; i < 20; i++) {
+    hold(500, ST_READY, 0.89f, 100.0f, ALARM_NONE);
+    hold(500, ST_READY, 0.91f, 100.0f, ALARM_NONE);
   }
   TEST_ASSERT_EQUAL_INT(ALARM_NONE, now());
 }

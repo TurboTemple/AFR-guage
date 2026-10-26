@@ -59,7 +59,7 @@ bool settings_validate(afr_settings_t *s)
   if (s->fuel >= FUEL_COUNT) { s->fuel = FUEL_PETROL; ch = true; }
   ch |= clampf(&s->fuel_custom, 5.0f, 20.0f, 14.7f);
   if (s->primary_unit > UNIT_AFR) { s->primary_unit = UNIT_LAMBDA; ch = true; }
-  ch |= clampf(&s->lean_load, 0.75f, 1.05f, 0.90f);
+  ch |= clampf(&s->lean_load, 0.75f, 1.05f, 0.92f);
   CLAMP_U(lean_load_ms, 20, 1000);
   ch |= clampf(&s->lean_part, 1.00f, 1.30f, 1.10f);
   CLAMP_U(lean_part_ms, 100, 3000);

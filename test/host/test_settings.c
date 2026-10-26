@@ -15,7 +15,7 @@ static void test_defaults_are_valid(void)
   TEST_ASSERT_FALSE(settings_validate(&s));
   TEST_ASSERT_EQUAL_INT(FUEL_PETROL, s.fuel);
   TEST_ASSERT_EQUAL_INT(UNIT_LAMBDA, s.primary_unit);
-  TEST_ASSERT_FLOAT_WITHIN(1e-6, 0.90, s.lean_load);
+  TEST_ASSERT_FLOAT_WITHIN(1e-6, 0.92, s.lean_load);
   TEST_ASSERT_EQUAL_UINT(100, s.lean_load_ms);
   TEST_ASSERT_FLOAT_WITHIN(1e-6, 1.10, s.lean_part);
   TEST_ASSERT_FLOAT_WITHIN(1e-6, 0.72, s.rich);

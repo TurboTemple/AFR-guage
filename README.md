@@ -21,7 +21,7 @@ These are host renders of the real UI code through LVGL 9.4 (`test/ui_preview`).
 | Resolution | 0.00003 λ per ADC step, below the Spartan's own 12-bit DAC step (0.00017 λ) |
 | Accuracy (simulated chain, every sample) | Within 0.002 λ from 0.5 to 4.5 V, after the start-up two-point calibration |
 | Added delay | About 4.65 ms (one block) after the Spartan. The Spartan is held to its 10 ms response mode. |
-| Lean at load alarm | Trips 100 ms after λ passes 0.90 with the throttle at or above 30 % (both adjustable) |
+| Lean at load alarm | Trips 100 ms after λ passes 0.92 with the throttle at or above 30 % (both adjustable) |
 | Logging | Every 215 Hz sample, unsmoothed, with throttle and alarm columns. A 9.5 s queue rides out SD stalls. |
 
 Everything runs at full rate all the time; there is no economy or cruise mode. Display smoothing (50 ms default) only affects the big number. Alarms, peaks and logs use the unsmoothed samples.
@@ -50,7 +50,7 @@ Alarms are always armed. Lambda alone can't tell a lean-out at full throttle fro
 
 | Alarm | Fires when | Default | Display |
 | --- | --- | --- | --- |
-| **LEAN AT LOAD** (danger) | Throttle ≥ load % **and** λ above the load limit, or on the lean rail, held for the set time | 30 %, λ 0.90, 100 ms | Red flash at 4 Hz, "LEAN AT LOAD" under the number |
+| **LEAN AT LOAD** (danger) | Throttle ≥ load % **and** λ above the load limit, or on the lean rail, held for the set time | 30 %, λ 0.92, 100 ms | Red flash at 4 Hz, "LEAN AT LOAD" under the number |
 | **LEAN** | Throttle open (above closed %) and λ above the part-throttle limit, held | λ 1.10, 500 ms | Amber flash at 2 Hz |
 | **RICH** | λ below the rich limit, or on the rich rail, held | λ 0.72, 500 ms | Amber flash at 2 Hz |
 
@@ -60,7 +60,7 @@ Alarms are always armed. Lambda alone can't tell a lean-out at full throttle fro
 - **Without a working TPS**, the screen says "NO TPS: LOAD ALARM OFF" (or "TPS FAULT"). LEAN still runs on λ alone, but the lean rail is ignored because it may be fuel cut.
 - **Peaks** (R/L at the bottom, ticks on the arc) count only samples under load. Idle and fuel cut don't pollute them.
 
-**Set it up:** in Settings, use *TPS closed → Learn* with your foot off, then *TPS WOT → Learn* with the pedal floored (engine off, ignition on). Set *Lean at load λ* to your engine's safe ceiling. 0.90 suits most petrol engines; boosted and alcohol engines usually want it richer.
+**Set it up:** in Settings, use *TPS closed → Learn* with your foot off, then *TPS WOT → Learn* with the pedal floored (engine off, ignition on). Set *Lean at load λ* to your engine's safe ceiling. The default 0.92 (13.5 AFR on petrol) is for a naturally aspirated petrol engine. Those make best power around λ 0.86–0.88 at full throttle, and the danger starts around 0.93–0.95. As a rule, set it about 0.04 above your tune's full-throttle target. A boosted engine wants it richer (about 0.85).
 
 ## Status
 

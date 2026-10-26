@@ -22,7 +22,7 @@ typedef struct {
   uint8_t  primary_unit;    /* unit_t */
   bool     show_afr;        /* add the AFR line below the unit */
 
-  float    lean_load;       /* lambda 0.75-1.05: danger limit under load */
+  float    lean_load;       /* lambda 0.75-1.05: danger limit under load (0.92) */
   uint16_t lean_load_ms;    /* 20-1000 */
   float    lean_part;       /* lambda 1.00-1.30: limit with the throttle open */
   uint16_t lean_part_ms;    /* 100-3000 */

@@ -6,7 +6,9 @@
 alarm_cfg_t alarms_default_cfg(void)
 {
   alarm_cfg_t c = {
-    .lean_load = 0.90f, .lean_load_ms = 100,
+    /* Naturally aspirated petrol makes best power around 0.86-0.88 at full
+     * throttle; 0.92 leaves margin above that and catches a lean-out. */
+    .lean_load = 0.92f, .lean_load_ms = 100,
     .lean_part = 1.10f, .lean_part_ms = 500,
     .rich = 0.72f, .rich_ms = 500,
     .load_pct = 30.0f, .closed_pct = 3.0f,

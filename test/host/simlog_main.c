@@ -70,8 +70,12 @@ int main(int argc, char **argv)
 
   const float a = CAL_A_NOMINAL * 1.006f, b = 0.008f;
   printf("# firmware=simlog\n# fuel=Petrol 14.70\n# sample_hz=215\n# cal=NOMINAL\n");
-  printf("# lambda_end_points=0.680,1.360\n# lean_load=0.90,100\n# lean_part=1.10,500\n");
-  printf("# rich=0.72,500\n# load_pct=30\n# closed_pct=3\n# smooth_ms=50\n# supply_sense=no\n");
+  const alarm_cfg_t *ac = &cfg.alarm;
+  printf("# lambda_end_points=0.680,1.360\n# lean_load=%.2f,%lu\n# lean_part=%.2f,%lu\n",
+         (double)ac->lean_load, (unsigned long)ac->lean_load_ms, (double)ac->lean_part,
+         (unsigned long)ac->lean_part_ms);
+  printf("# rich=%.2f,%lu\n# load_pct=%.0f\n# closed_pct=%.0f\n# smooth_ms=50\n# supply_sense=no\n",
+         (double)ac->rich, (unsigned long)ac->rich_ms, (double)ac->load_pct, (double)ac->closed_pct);
   printf("%s\n", LOG_COLUMNS);
 
   uint64_t t_us = 0, next_led = 0, next_tps = 0;
