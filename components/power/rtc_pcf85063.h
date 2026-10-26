@@ -15,11 +15,11 @@
 extern "C" {
 #endif
 
-esp_err_t rtc_init(i2c_master_bus_handle_t bus);
+esp_err_t pcf85063_init(i2c_master_bus_handle_t bus);
 /* Fills tm; *valid false if the oscillator stopped since the last set. */
-esp_err_t rtc_read(struct tm *tm, bool *valid);
+esp_err_t pcf85063_read(struct tm *tm, bool *valid);
 /* Sets the time and clears the oscillator-stop flag. */
-esp_err_t rtc_write(const struct tm *tm);
+esp_err_t pcf85063_write(const struct tm *tm);
 
 #ifdef __cplusplus
 }

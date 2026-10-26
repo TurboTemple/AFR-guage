@@ -12,7 +12,7 @@ static i2c_master_dev_handle_t s_dev;
 static uint8_t bcd2bin(uint8_t v) { return (uint8_t)((v >> 4) * 10 + (v & 0x0F)); }
 static uint8_t bin2bcd(int v) { return (uint8_t)(((v / 10) << 4) | (v % 10)); }
 
-esp_err_t rtc_init(i2c_master_bus_handle_t bus)
+esp_err_t pcf85063_init(i2c_master_bus_handle_t bus)
 {
   i2c_device_config_t dc = {
     .dev_addr_length = I2C_ADDR_BIT_LEN_7,
@@ -22,7 +22,7 @@ esp_err_t rtc_init(i2c_master_bus_handle_t bus)
   return i2c_master_bus_add_device(bus, &dc, &s_dev);
 }
 
-esp_err_t rtc_read(struct tm *tm, bool *valid)
+esp_err_t pcf85063_read(struct tm *tm, bool *valid)
 {
   uint8_t reg = REG_SECONDS, r[7];
   ESP_RETURN_ON_ERROR(i2c_master_transmit_receive(s_dev, &reg, 1, r, sizeof r, 20), TAG, "read");
@@ -39,7 +39,7 @@ esp_err_t rtc_read(struct tm *tm, bool *valid)
   return ESP_OK;
 }
 
-esp_err_t rtc_write(const struct tm *tm)
+esp_err_t pcf85063_write(const struct tm *tm)
 {
   uint8_t b[8] = {
     REG_SECONDS,

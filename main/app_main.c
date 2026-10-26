@@ -132,7 +132,7 @@ static void ui_set_brightness(int pct) { bsp_display_brightness_set(pct); }
 
 static void ui_set_clock(const struct tm *tm)
 {
-  if (rtc_write(tm) != ESP_OK) return;
+  if (pcf85063_write(tm) != ESP_OK) return;
   struct tm t = *tm;
   struct timeval tv = { .tv_sec = mktime(&t) };
   settimeofday(&tv, NULL);
@@ -367,7 +367,7 @@ void app_main(void)
 
   /* 4. RTC. */
   struct tm tm = { 0 };
-  if (rtc_init(onboard) == ESP_OK && rtc_read(&tm, &s_rtc_valid) == ESP_OK && s_rtc_valid) {
+  if (pcf85063_init(onboard) == ESP_OK && pcf85063_read(&tm, &s_rtc_valid) == ESP_OK && s_rtc_valid) {
     struct tm t = tm;
     struct timeval tv = { .tv_sec = mktime(&t) };
     settimeofday(&tv, NULL);
