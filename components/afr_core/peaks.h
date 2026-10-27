@@ -1,4 +1,4 @@
-/* Peak hold: the richest and leanest lambda seen where it matters. */
+/* Peak hold: the richest and leanest lambda seen. */
 #pragma once
 
 #include <stdbool.h>
@@ -18,10 +18,8 @@ typedef struct {
 } peaks_t;
 
 void peaks_reset(peaks_t *p);
-/* counts: this sample is eligible (under load when the throttle is known,
- * else any READY sample). Numbers come from READY only; rails are flagged
- * separately, and only while counts. */
-void peaks_update(peaks_t *p, gauge_state_t st, float lambda, bool counts);
+/* Numbers come from READY only; rails are flagged separately. */
+void peaks_update(peaks_t *p, gauge_state_t st, float lambda);
 
 #ifdef __cplusplus
 }

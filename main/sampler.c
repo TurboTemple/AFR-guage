@@ -20,9 +20,8 @@ static const char *TAG = "sampler";
 #define AUX_PRIO        18
 #define RDY_TIMEOUT_MS  5
 #define REARM_MS        50
-#define AUX_PERIOD_MS   5   /* TPS every tick: 200 Hz */
-#define AUX_LED_EVERY   4   /* 50 Hz */
-#define AUX_SUPPLY_EVERY 20 /* 10 Hz */
+#define AUX_PERIOD_MS   20  /* LED every tick: 50 Hz */
+#define AUX_SUPPLY_EVERY 5  /* 10 Hz */
 
 static ads1115_t *s_lambda, *s_aux;
 static afr_pipeline_t s_p;
@@ -34,7 +33,7 @@ static volatile int64_t s_rdy_us;
 
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static afr_config_t s_pending_cfg;
-static bool s_cfg_dirty, s_reset_peaks, s_ack;
+static bool s_cfg_dirty, s_reset_peaks;
 static cal_coeffs_t s_cal_copy;
 static cal_source_t s_cal_src_copy;
 static bool s_cal_rej_copy;
@@ -46,8 +45,8 @@ typedef struct {
   int16_t  code;
 } led_sample_t;
 static QueueHandle_t s_led_q;
-static bool s_tps_new, s_tps_ok, s_sup_new, s_sup_ok;
-static int16_t s_tps_code, s_sup_code;
+static bool s_sup_new, s_sup_ok;
+static int16_t s_sup_code;
 
 static void IRAM_ATTR rdy_isr(void *arg)
 {
@@ -63,30 +62,24 @@ static uint32_t now_ms(void)
   return (uint32_t)(esp_timer_get_time() / 1000);
 }
 
-/* Settings, acknowledgements and second-ADC values, between samples. */
+/* Settings and second-ADC values, between samples. */
 static void take_inputs(void)
 {
   afr_config_t cfg;
-  bool dirty, reset, ack, tps_new, tps_ok, sup_new, sup_ok;
-  int16_t tps_code, sup_code;
+  bool dirty, reset, sup_new, sup_ok;
+  int16_t sup_code;
   taskENTER_CRITICAL(&s_mux);
   dirty = s_cfg_dirty;
   if (dirty) cfg = s_pending_cfg;
   reset = s_reset_peaks;
-  ack = s_ack;
-  tps_new = s_tps_new;
-  tps_ok = s_tps_ok;
-  tps_code = s_tps_code;
   sup_new = s_sup_new;
   sup_ok = s_sup_ok;
   sup_code = s_sup_code;
-  s_cfg_dirty = s_reset_peaks = s_ack = s_tps_new = s_sup_new = false;
+  s_cfg_dirty = s_reset_peaks = s_sup_new = false;
   taskEXIT_CRITICAL(&s_mux);
 
   if (dirty) afr_pipeline_set_config(&s_p, &cfg);
   if (reset) afr_pipeline_reset_peaks(&s_p);
-  if (ack) afr_pipeline_ack_alarm(&s_p);
-  if (tps_new) afr_pipeline_tps_sample(&s_p, tps_ok, tps_code);
   if (sup_new) afr_pipeline_supply_sample(&s_p, sup_ok, sup_code);
   led_sample_t l;
   while (xQueueReceive(s_led_q, &l, 0) == pdTRUE) afr_pipeline_led_sample(&s_p, l.t_ms, l.code);
@@ -176,22 +169,14 @@ static void aux_task(void *arg)
   uint32_t tick = 0;
   for (;;) {
     vTaskDelayUntil(&wake, pdMS_TO_TICKS(AUX_PERIOD_MS));
-    int16_t code;
-    bool ok = ads1115_read(s_aux, 1, &code) == ESP_OK;
-    if (!ok) s_stats.aux_errors++;
-    taskENTER_CRITICAL(&s_mux);
-    s_tps_new = true;
-    s_tps_ok = ok;
-    s_tps_code = code;
-    taskEXIT_CRITICAL(&s_mux);
+    led_sample_t l = { .t_ms = now_ms() };
+    if (ads1115_read(s_aux, 0, &l.code) == ESP_OK) xQueueSend(s_led_q, &l, 0);
+    else s_stats.aux_errors++;
 
-    if (tick % AUX_LED_EVERY == 0) {
-      led_sample_t l = { .t_ms = now_ms() };
-      if (ads1115_read(s_aux, 0, &l.code) == ESP_OK) xQueueSend(s_led_q, &l, 0);
-      else s_stats.aux_errors++;
-    }
     if (s_p.supply_fitted && tick % AUX_SUPPLY_EVERY == 2) {
-      ok = ads1115_read(s_aux, 2, &code) == ESP_OK;
+      int16_t code;
+      bool ok = ads1115_read(s_aux, 2, &code) == ESP_OK;
+      if (!ok) s_stats.aux_errors++;
       taskENTER_CRITICAL(&s_mux);
       s_sup_new = true;
       s_sup_ok = ok;
@@ -260,13 +245,6 @@ void sampler_reset_peaks(void)
 {
   taskENTER_CRITICAL(&s_mux);
   s_reset_peaks = true;
-  taskEXIT_CRITICAL(&s_mux);
-}
-
-void sampler_ack_alarm(void)
-{
-  taskENTER_CRITICAL(&s_mux);
-  s_ack = true;
   taskEXIT_CRITICAL(&s_mux);
 }
 

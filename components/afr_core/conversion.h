@@ -24,12 +24,6 @@ extern "C" {
  * 31 mV at the Spartan output, 0.004 lambda. */
 #define SPIKE_CODES        150
 
-/* Throttle position: 0-5 V through the same 10k/15k divider. Outside these
- * volts the wire is open or shorted. */
-#define TPS_V_MIN          0.10f
-#define TPS_V_MAX          4.95f
-#define TPS_MIN_SPAN_V     0.50f /* closed and WOT must differ this much */
-
 /* Rails: the Spartan output is clipped beyond these. */
 #define RAIL_RICH_V        0.02f
 #define RAIL_LEAN_V        4.98f
@@ -58,11 +52,6 @@ float conv_code_to_volts(float a, float b, int32_t code);
 float conv_code_to_adc_volts(int32_t code);
 /* ADC code on AIN2 to Spartan supply volts. */
 float conv_code_to_supply_v(int32_t code);
-
-/* Throttle % from sensor volts and the learnt closed/WOT volts (either way
- * round). NAN if not learnt or the volts are implausible. */
-float conv_tps_pct(float v, float v_closed, float v_wot);
-bool conv_tps_learnt(float v_closed, float v_wot);
 
 /* lambda = lam0 + (lam5 - lam0) * v / 5 */
 float conv_lambda(const lambda_range_t *r, float v_out);

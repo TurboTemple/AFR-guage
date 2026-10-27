@@ -162,7 +162,7 @@ const char *gs_fault_text(fault_reason_t f)
   switch (f) {
   case FAULT_I2C: return "ADC read failed";
   case FAULT_ADC_NOT_FOUND: return "Lambda ADC not found";
-  case FAULT_AUX_NOT_FOUND: return "LED/TPS ADC not found";
+  case FAULT_AUX_NOT_FOUND: return "LED ADC not found";
   default: return "";
   }
 }

@@ -36,6 +36,22 @@ static void dump(const char *name)
   FILE *f = fopen(path, "wb"); fwrite(fb, 2, 466 * 466, f); fclose(f);
 }
 
+/* A warning frame with the flash on: step until the background is lit. */
+static void dump_lit(const char *name)
+{
+  run(300); /* past the next toggle, so the warning's own colour shows */
+  lv_obj_invalidate(lv_screen_active());
+  lv_refr_now(NULL);
+  for (int i = 0; i < 50 && fb[440 * 466 + 233] == 0; i++) {
+    run(20);
+    lv_obj_invalidate(lv_screen_active());
+    lv_refr_now(NULL);
+  }
+  char path[256];
+  snprintf(path, sizeof path, "%s/%s.raw", s_out, name);
+  FILE *f = fopen(path, "wb"); fwrite(fb, 2, 466 * 466, f); fclose(f);
+}
+
 int main(int argc, char **argv)
 {
   if (argc > 1) s_out = argv[1];
@@ -56,8 +72,8 @@ int main(int argc, char **argv)
 
   memset(&R, 0, sizeof R);
   R.t_ms = 100000; R.state = ST_READY; R.lambda = R.lambda_disp = 0.87f; R.afr = 0.87f * 14.7f; R.v_out = 1.397f;
-  R.flags = FLAG_CAL_FRESH | FLAG_TPS_OK | FLAG_UNDER_LOAD; R.peak_rich = 0.80f; R.peak_lean = 0.86f;
-  R.led_pattern = LED_STEADY; R.supply_v = NAN; R.tps = 100.0f; R.tps_v = 4.40f;
+  R.flags = FLAG_CAL_FRESH; R.peak_rich = 0.80f; R.peak_lean = 0.86f;
+  R.led_pattern = LED_STEADY; R.supply_v = NAN;
   ui_start(&h, &s, rg);
   run(500); dump("ready");
 
@@ -72,13 +88,11 @@ int main(int argc, char **argv)
   R.state = ST_WAIT_EXHAUST; run(300); dump("wait");
   R.state = ST_LEAN_RAIL; R.lambda = 1.36f; R.lambda_disp = 1.36f; run(300); dump("lean_rail");
   R.state = ST_FAULT; R.fault = FAULT_ADC_NOT_FOUND; run(300); dump("fault");
-  R.state = ST_READY; R.lambda = R.lambda_disp = 0.95f; R.alarm = ALARM_LEAN_LOAD; S.rtc_valid = true;
-  R.flags |= FLAG_EVENT_PENDING; R.event = (alarm_event_t){ ALARM_LEAN_LOAD, 0.96f, 100.0f, 0, 400 };
-  run(250); dump("warn"); run(125); dump("alarm_danger");
-  R.alarm = ALARM_NONE; R.lambda = R.lambda_disp = 1.0f; R.tps = 0.0f; R.flags &= ~FLAG_UNDER_LOAD;
-  run(300); dump("event_latched");
-  R.flags &= ~FLAG_EVENT_PENDING; R.flags &= ~FLAG_TPS_OK; R.tps = NAN; run(300); dump("no_tps");
-  R.flags |= FLAG_TPS_OK; R.tps = 100.0f; R.flags |= FLAG_UNDER_LOAD;
+  R.state = ST_READY; R.lambda = R.lambda_disp = 1.08f; R.alarm = ALARM_LEAN; S.rtc_valid = true;
+  R.peak_lean = 1.08f; dump_lit("lean");
+  R.lambda = R.lambda_disp = 0.73f; R.alarm = ALARM_RICH; R.peak_rich = 0.73f; R.peak_lean = 0.86f;
+  dump_lit("rich");
+  R.alarm = ALARM_NONE; R.lambda = R.lambda_disp = 1.0f; run(300); dump("ready_after");
 
   for (int i = 0; i < 300; i++) {
     R.lambda = R.lambda_disp = 1.0f + 0.12f * sinf((float)i / 15.0f) - (i > 200 ? 0.15f : 0.0f);

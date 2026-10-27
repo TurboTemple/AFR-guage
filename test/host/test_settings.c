@@ -15,13 +15,10 @@ static void test_defaults_are_valid(void)
   TEST_ASSERT_FALSE(settings_validate(&s));
   TEST_ASSERT_EQUAL_INT(FUEL_PETROL, s.fuel);
   TEST_ASSERT_EQUAL_INT(UNIT_LAMBDA, s.primary_unit);
-  TEST_ASSERT_FLOAT_WITHIN(1e-6, 0.92, s.lean_load);
-  TEST_ASSERT_EQUAL_UINT(100, s.lean_load_ms);
-  TEST_ASSERT_FLOAT_WITHIN(1e-6, 1.10, s.lean_part);
-  TEST_ASSERT_FLOAT_WITHIN(1e-6, 0.72, s.rich);
-  TEST_ASSERT_EQUAL_UINT(30, s.load_pct);
-  TEST_ASSERT_EQUAL_UINT(3, s.closed_pct);
-  TEST_ASSERT_FLOAT_IS_NAN(s.tps_closed_v);
+  TEST_ASSERT_FLOAT_WITHIN(1e-6, 1.05, s.lean);
+  TEST_ASSERT_EQUAL_UINT(300, s.lean_ms);
+  TEST_ASSERT_FLOAT_WITHIN(1e-6, 0.75, s.rich);
+  TEST_ASSERT_EQUAL_UINT(300, s.rich_ms);
   TEST_ASSERT_EQUAL_UINT(50, s.smooth_ms);
   TEST_ASSERT_EQUAL_UINT(1, s.spartan_perf); /* 10 ms response */
   TEST_ASSERT_FALSE(s.cal_valid);
@@ -32,24 +29,20 @@ static void test_clamps(void)
   afr_settings_t s;
   settings_defaults(&s);
   s.fuel = 9;
-  s.lean_load = 1.5f;
-  s.lean_load_ms = 5;
-  s.lean_part = 0.9f;
+  s.lean = 1.5f;
+  s.lean_ms = 5;
   s.rich = 0.5f;
   s.rich_ms = 9000;
-  s.load_pct = 95;
   s.smooth_ms = 900;
   s.spartan_perf = 7;
   s.bright_day = 0;
   s.fuel_custom = NAN;
   TEST_ASSERT_TRUE(settings_validate(&s));
   TEST_ASSERT_EQUAL_INT(FUEL_PETROL, s.fuel);
-  TEST_ASSERT_FLOAT_WITHIN(1e-6, 1.05, s.lean_load);
-  TEST_ASSERT_EQUAL_UINT(20, s.lean_load_ms);
-  TEST_ASSERT_FLOAT_WITHIN(1e-6, 1.00, s.lean_part);
+  TEST_ASSERT_FLOAT_WITHIN(1e-6, 1.30, s.lean);
+  TEST_ASSERT_EQUAL_UINT(100, s.lean_ms);
   TEST_ASSERT_FLOAT_WITHIN(1e-6, 0.68, s.rich);
   TEST_ASSERT_EQUAL_UINT(3000, s.rich_ms);
-  TEST_ASSERT_EQUAL_UINT(90, s.load_pct);
   TEST_ASSERT_EQUAL_UINT(500, s.smooth_ms);
   TEST_ASSERT_EQUAL_UINT(2, s.spartan_perf);
   TEST_ASSERT_EQUAL_UINT(5, s.bright_day);
@@ -57,42 +50,18 @@ static void test_clamps(void)
   TEST_ASSERT_FALSE(settings_validate(&s));
 }
 
-static void test_closed_below_load(void)
+static void test_rich_kept_below_lean(void)
 {
   afr_settings_t s;
   settings_defaults(&s);
-  s.load_pct = 10;
-  s.closed_pct = 20;
-  settings_validate(&s);
-  TEST_ASSERT_EQUAL_UINT(5, s.closed_pct);
-}
-
-static void test_tps_learn(void)
-{
-  afr_settings_t s;
-  settings_defaults(&s);
-  s.tps_closed_v = 0.62f; /* half learnt: kept */
-  TEST_ASSERT_FALSE(settings_validate(&s));
-  TEST_ASSERT_FLOAT_WITHIN(1e-6, 0.62, s.tps_closed_v);
-  s.tps_wot_v = 4.41f;
-  TEST_ASSERT_FALSE(settings_validate(&s));
-  TEST_ASSERT_TRUE(conv_tps_learnt(s.tps_closed_v, s.tps_wot_v));
-  alarm_cfg_t a = settings_alarm_cfg(&s);
-  TEST_ASSERT_FLOAT_WITHIN(1e-6, 30.0, a.load_pct);
-  s.tps_wot_v = 9.0f; /* implausible: dropped */
+  s.lean = 0.90f;
+  s.rich = 0.88f;
   TEST_ASSERT_TRUE(settings_validate(&s));
-  TEST_ASSERT_FLOAT_IS_NAN(s.tps_wot_v);
-}
-
-static void test_tps_pct(void)
-{
-  TEST_ASSERT_FLOAT_WITHIN(1e-4, 0.0, conv_tps_pct(0.60f, 0.60f, 4.40f));
-  TEST_ASSERT_FLOAT_WITHIN(1e-4, 50.0, conv_tps_pct(2.50f, 0.60f, 4.40f));
-  TEST_ASSERT_FLOAT_WITHIN(1e-4, 100.0, conv_tps_pct(4.60f, 0.60f, 4.40f)); /* clamped */
-  TEST_ASSERT_FLOAT_WITHIN(1e-4, 25.0, conv_tps_pct(3.45f, 4.40f, 0.60f)); /* falling sensor */
-  TEST_ASSERT_FLOAT_IS_NAN(conv_tps_pct(0.02f, 0.60f, 4.40f));  /* open wire */
-  TEST_ASSERT_FLOAT_IS_NAN(conv_tps_pct(2.0f, NAN, 4.40f));     /* not learnt */
-  TEST_ASSERT_FLOAT_IS_NAN(conv_tps_pct(2.0f, 2.0f, 2.3f));     /* too narrow */
+  TEST_ASSERT_FLOAT_WITHIN(1e-6, 0.85, s.rich);
+  alarm_cfg_t a = settings_alarm_cfg(&s);
+  TEST_ASSERT_FLOAT_WITHIN(1e-6, 0.90, a.lean);
+  TEST_ASSERT_FLOAT_WITHIN(1e-6, 0.85, a.rich);
+  TEST_ASSERT_EQUAL_UINT(300, a.lean_ms);
 }
 
 static void test_implausible_stored_cal_dropped(void)
@@ -125,9 +94,7 @@ int main(void)
   UNITY_BEGIN();
   RUN_TEST(test_defaults_are_valid);
   RUN_TEST(test_clamps);
-  RUN_TEST(test_closed_below_load);
-  RUN_TEST(test_tps_learn);
-  RUN_TEST(test_tps_pct);
+  RUN_TEST(test_rich_kept_below_lean);
   RUN_TEST(test_implausible_stored_cal_dropped);
   RUN_TEST(test_stoich);
   return UNITY_END();

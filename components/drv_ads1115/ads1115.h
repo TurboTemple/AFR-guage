@@ -2,8 +2,7 @@
  *
  *   0x48 (ADDR to GND)  lambda: continuous AIN0-AIN1 differential, 860 SPS,
  *                       ALERT/RDY pulses at each conversion (to GPIO43)
- *   0x49 (ADDR to VDD)  housekeeping: single-shot AIN0 LED, AIN1 TPS,
- *                       AIN2 supply
+ *   0x49 (ADDR to VDD)  housekeeping: single-shot AIN0 LED, AIN2 supply
  *
  * +/-4.096 V full scale, 125 uV/LSB, on both. */
 #pragma once

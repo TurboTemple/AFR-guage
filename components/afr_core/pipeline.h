@@ -2,14 +2,14 @@
  * replay tool:
  *
  *   lambda ADC block mean -> calibrated volts -> state check -> lambda
- *   -> alarms and peaks -> display smoothing
+ *   -> warnings and peaks -> display smoothing
  *
  * The firmware feeds one decimated lambda sample about every 4.65 ms
- * (860 SPS / 4) with afr_pipeline_step_raw(). The LED, throttle and supply
- * come from the second ADC at their own rates through the *_sample()
- * calls; the newest value is used at each step. Replay calls
- * afr_pipeline_step_volts() with a log's calibrated v_out, decoded LED and
- * throttle %, which skips calibration and LED decoding. */
+ * (860 SPS / 4) with afr_pipeline_step_raw(). The LED and supply come from
+ * the second ADC at their own rates through the *_sample() calls; the
+ * newest value is used at each step. Replay calls afr_pipeline_step_volts()
+ * with a log's calibrated v_out and decoded LED, which skips calibration
+ * and LED decoding. */
 #pragma once
 
 #include <stdbool.h>
@@ -37,7 +37,7 @@ enum {
   AFR_EVT_SPARTAN_DOWN = 1u << 1, /* returned to NO_SPARTAN */
   AFR_EVT_CAL_ACCEPTED = 1u << 2, /* fresh calibration: save it */
   AFR_EVT_CAL_REJECTED = 1u << 3, /* fit rejected: log CAL_REJECTED */
-  AFR_EVT_ALARM        = 1u << 4, /* an alarm began */
+  AFR_EVT_ALARM        = 1u << 4, /* a warning began */
 };
 
 typedef struct {
@@ -45,8 +45,6 @@ typedef struct {
   float       stoich;     /* of the selected fuel */
   uint16_t    smooth_ms;  /* display filter tau */
   alarm_cfg_t alarm;
-  float       tps_closed_v; /* learnt TPS volts; NAN if not learnt */
-  float       tps_wot_v;
 } afr_config_t;
 
 typedef struct {
@@ -70,8 +68,6 @@ typedef struct {
 
   float          v_out;
   float          supply_v;
-  float          tps;         /* % or NAN */
-  float          tps_v;       /* sensor volts or NAN */
   led_pattern_t  led_pattern;
   alarm_t        last_alarm;
   uint8_t        events;
@@ -85,19 +81,17 @@ void afr_pipeline_start(afr_pipeline_t *p, uint32_t t_ms);
 void afr_pipeline_fault(afr_pipeline_t *p, fault_reason_t reason, uint32_t t_ms);
 void afr_pipeline_set_config(afr_pipeline_t *p, const afr_config_t *cfg);
 void afr_pipeline_reset_peaks(afr_pipeline_t *p);
-void afr_pipeline_ack_alarm(afr_pipeline_t *p);
 uint8_t afr_pipeline_take_events(afr_pipeline_t *p);
 
 /* Second-ADC inputs, whenever they are read. A failed read passes ok false. */
 void afr_pipeline_led_sample(afr_pipeline_t *p, uint32_t t_ms, int16_t code);
-void afr_pipeline_tps_sample(afr_pipeline_t *p, bool ok, int16_t code);
 void afr_pipeline_supply_sample(afr_pipeline_t *p, bool ok, int16_t code);
 
 /* One decimated lambda sample: the mean ADC code of its block. */
 void afr_pipeline_step_raw(afr_pipeline_t *p, uint32_t t_ms, bool ok, float code, reading_t *out);
-/* Replay. supply_v and tps NAN if not known. */
+/* Replay. supply_v NAN if not known. */
 void afr_pipeline_step_volts(afr_pipeline_t *p, uint32_t t_ms, float v_out, led_pattern_t led,
-                             float supply_v, float tps, reading_t *out);
+                             float supply_v, reading_t *out);
 
 #ifdef __cplusplus
 }

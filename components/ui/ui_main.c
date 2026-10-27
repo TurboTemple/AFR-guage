@@ -20,8 +20,8 @@
 #define TICK_W       4
 #define NUM_BASELINE 268   /* baseline of the main number */
 #define NUM_MS       100   /* digits at 10 Hz */
-#define FLASH_WARN_MS   250 /* warning (lean, rich): amber at 2 Hz */
-#define FLASH_DANGER_MS 125 /* lean under load: red at 4 Hz */
+#define FLASH_LEAN_MS 125  /* lean warning: red at 4 Hz */
+#define FLASH_RICH_MS 250  /* rich warning: amber at 2 Hz */
 #define SHIFT_MS     (5u * 60u * 1000u)
 #define DIM_AFTER_MS (2u * 60u * 1000u)
 #define DIM_PERCENT  10
@@ -141,11 +141,6 @@ static void tap_cb(lv_event_t *e)
 {
   lv_event_code_t code = lv_event_get_code(e);
   if (code == LV_EVENT_SHORT_CLICKED) {
-    /* A tap first acknowledges a latched alarm event. */
-    if ((g_ui.r.flags & FLAG_EVENT_PENDING) && g_ui.r.alarm == ALARM_NONE) {
-      if (g_ui.hooks.ack_alarm) g_ui.hooks.ack_alarm();
-      return;
-    }
     g_ui.s.show_afr = !g_ui.s.show_afr;
     ui_notify_settings();
   } else if (code == LV_EVENT_LONG_PRESSED) {
@@ -399,29 +394,18 @@ static void update_texts(const reading_t *r)
   const char *cal = (r->flags & FLAG_CAL_FRESH) ? "FRESH" : (r->flags & FLAG_CAL_STORED) ? "STORED" : "NOMINAL";
   lv_label_set_text(m.cal_lbl, cal);
 
-  /* Second line: a problem if there is one, else the throttle. */
-  char tps_txt[32];
-  const char *hint;
-  uint32_t hint_col = COL_LEAN;
+  /* Second line: a problem if there is one. */
+  const char *hint = "";
   if (st->sensor_type > 0) hint = "SENSOR TYPE NOT LSU 4.9";
-  else if (r->flags & FLAG_TPS_FAULT) hint = "TPS FAULT: LOAD ALARM OFF";
-  else if (!(r->flags & FLAG_TPS_OK)) hint = "NO TPS: LOAD ALARM OFF";
   else if (r->flags & FLAG_CAL_REJECTED) hint = "CAL REJECTED";
   else if (!st->rtc_valid) hint = "set clock";
-  else {
-    fmt_fixed(a, sizeof a, r->tps, 0);
-    snprintf(tps_txt, sizeof tps_txt, "TPS %s %%", a);
-    hint = tps_txt;
-    hint_col = (r->flags & FLAG_UNDER_LOAD) ? COL_TEXT : COL_GREY;
-  }
   if (strcmp(hint, lv_label_get_text(m.hint)) != 0) lv_label_set_text(m.hint, hint);
-  lv_obj_set_style_text_color(m.hint, lv_color_hex(hint_col), 0);
 
-  /* While alarming, the unit line names the alarm. */
+  /* While warning, the unit line names it, white on the flash. */
   if (s == ST_READY) {
     if (r->alarm != ALARM_NONE) {
       lv_label_set_text(m.unit, alarm_name((alarm_t)r->alarm));
-      lv_obj_set_style_text_color(m.unit, lv_color_hex(r->alarm == ALARM_LEAN_LOAD ? COL_TEXT : COL_LEAN), 0);
+      lv_obj_set_style_text_color(m.unit, lv_color_hex(COL_TEXT), 0);
       m.unit_alarm = true;
     } else if (m.unit_alarm) {
       m.unit_alarm = false;
@@ -430,27 +414,9 @@ static void update_texts(const reading_t *r)
     }
   }
 
-  /* An alarm event waiting to be seen replaces the peaks until a tap. */
-  if (r->flags & FLAG_EVENT_PENDING) {
-    const alarm_event_t *ev = &r->event;
-    char dur[16], tp[32] = "";
-    fmt_fixed(a, sizeof a, ev->lambda, 2);
-    fmt_fixed(dur, sizeof dur, (float)ev->dur_ms / 1000.0f, 1);
-    if (!isnan(ev->tps)) {
-      fmt_fixed(b, sizeof b, ev->tps, 0);
-      snprintf(tp, sizeof tp, " @%s%%", b);
-    }
-    const char *what = ev->type == ALARM_RICH ? "RICH" : "LEAN";
-    snprintf(buf, sizeof buf, "%s %s%s %ss", what, a, tp, dur);
-    if (strcmp(buf, lv_label_get_text(m.peaks)) != 0) lv_label_set_text(m.peaks, buf);
-    /* White on the flashing background while live; then the alarm colour. */
-    uint32_t col = r->alarm != ALARM_NONE ? COL_TEXT : ev->type == ALARM_LEAN_LOAD ? COL_WARN : COL_LEAN;
-    lv_obj_set_style_text_color(m.peaks, lv_color_hex(col), 0);
-    return;
-  }
-  lv_obj_set_style_text_color(m.peaks, lv_color_hex(COL_GREY), 0);
-
-  /* Peaks under load: numbers from READY only; a rich rail is flagged. */
+  /* Peaks since the last reset: numbers from READY only; a rich rail is
+   * flagged. White on the flashing background. */
+  lv_obj_set_style_text_color(m.peaks, lv_color_hex(r->alarm != ALARM_NONE ? COL_TEXT : COL_GREY), 0);
   if (isnan(r->peak_rich)) {
     lv_label_set_text(m.peaks, (r->flags & FLAG_RICH_RAIL_SEEN) ? "R RAIL" : "");
   } else {
@@ -501,14 +467,14 @@ void ui_main_tick(uint32_t now)
     update_brightness(r);
   }
 
-  /* Alarms flash the background until they clear: lean under load red at
-   * 4 Hz, the warnings amber at 2 Hz. */
+  /* Warnings flash the background until they clear: lean red at 4 Hz,
+   * rich amber at 2 Hz. */
   if (r->alarm != ALARM_NONE) {
-    bool danger = r->alarm == ALARM_LEAN_LOAD;
-    if (now - m.last_flash_ms >= (danger ? FLASH_DANGER_MS : FLASH_WARN_MS)) {
+    bool lean = r->alarm == ALARM_LEAN;
+    if (now - m.last_flash_ms >= (lean ? FLASH_LEAN_MS : FLASH_RICH_MS)) {
       m.last_flash_ms = now;
       m.flash_on = !m.flash_on;
-      uint32_t col = danger ? COL_WARN : 0x7A4A00;
+      uint32_t col = lean ? COL_WARN : 0x7A4A00;
       lv_obj_set_style_bg_color(g_ui.scr_main, lv_color_hex(m.flash_on ? col : COL_BG), 0);
     }
   } else if (m.flash_on) {

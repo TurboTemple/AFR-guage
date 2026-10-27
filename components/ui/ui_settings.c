@@ -40,43 +40,14 @@ static void f_unit(char *b, size_t n) { snprintf(b, n, "%s", g_ui.s.primary_unit
 static void s_unit(int d) { (void)d; g_ui.s.primary_unit = g_ui.s.primary_unit == UNIT_AFR ? UNIT_LAMBDA : UNIT_AFR; }
 static void f_show(char *b, size_t n) { snprintf(b, n, "%s", g_ui.s.show_afr ? "On" : "Off"); }
 static void s_show(int d) { (void)d; g_ui.s.show_afr = !g_ui.s.show_afr; }
-static void f_lload(char *b, size_t n) { fx(b, n, g_ui.s.lean_load, 2); }
-static void s_lload(int d) { g_ui.s.lean_load = clampf(g_ui.s.lean_load + 0.01f * (float)d, 0.75f, 1.05f); }
-static void f_lload_t(char *b, size_t n) { snprintf(b, n, "%u ms", g_ui.s.lean_load_ms); }
-static void s_lload_t(int d) { g_ui.s.lean_load_ms = (uint16_t)clampi(g_ui.s.lean_load_ms + 10 * d, 20, 1000); }
-static void f_load(char *b, size_t n) { snprintf(b, n, "%u %%", g_ui.s.load_pct); }
-static void s_load(int d) { g_ui.s.load_pct = (uint8_t)clampi(g_ui.s.load_pct + 5 * d, 10, 90); }
-static void f_lpart(char *b, size_t n) { fx(b, n, g_ui.s.lean_part, 2); }
-static void s_lpart(int d) { g_ui.s.lean_part = clampf(g_ui.s.lean_part + 0.01f * (float)d, 1.00f, 1.30f); }
-static void f_lpart_t(char *b, size_t n) { snprintf(b, n, "%u ms", g_ui.s.lean_part_ms); }
-static void s_lpart_t(int d) { g_ui.s.lean_part_ms = (uint16_t)clampi(g_ui.s.lean_part_ms + 100 * d, 100, 3000); }
+static void f_lean(char *b, size_t n) { fx(b, n, g_ui.s.lean, 2); }
+static void s_lean(int d) { g_ui.s.lean = clampf(g_ui.s.lean + 0.01f * (float)d, 0.85f, 1.30f); }
+static void f_lean_t(char *b, size_t n) { snprintf(b, n, "%u ms", g_ui.s.lean_ms); }
+static void s_lean_t(int d) { g_ui.s.lean_ms = (uint16_t)clampi(g_ui.s.lean_ms + 100 * d, 100, 3000); }
 static void f_rich(char *b, size_t n) { fx(b, n, g_ui.s.rich, 2); }
-static void s_rich(int d) { g_ui.s.rich = clampf(g_ui.s.rich + 0.01f * (float)d, 0.68f, 0.85f); }
+static void s_rich(int d) { g_ui.s.rich = clampf(g_ui.s.rich + 0.01f * (float)d, 0.68f, 0.90f); }
 static void f_rich_t(char *b, size_t n) { snprintf(b, n, "%u ms", g_ui.s.rich_ms); }
 static void s_rich_t(int d) { g_ui.s.rich_ms = (uint16_t)clampi(g_ui.s.rich_ms + 100 * d, 100, 3000); }
-static void f_closed(char *b, size_t n) { snprintf(b, n, "%u %%", g_ui.s.closed_pct); }
-static void s_closed(int d) { g_ui.s.closed_pct = (uint8_t)clampi(g_ui.s.closed_pct + d, 0, 20); }
-
-/* TPS learning: closed with the foot off, WOT with the pedal floored
- * (engine off, ignition on). */
-static void fmt_volts(char *b, size_t n, float v)
-{
-  if (isnan(v)) {
-    snprintf(b, n, "not learnt");
-    return;
-  }
-  fx(b, n, v, 2);
-  strlcat(b, " V", n);
-}
-static void learn(float *dst)
-{
-  float v = g_ui.hooks.tps_volts ? g_ui.hooks.tps_volts() : NAN;
-  if (!isnan(v) && v >= TPS_V_MIN && v <= TPS_V_MAX) *dst = v;
-}
-static void f_tps_closed(char *b, size_t n) { fmt_volts(b, n, g_ui.s.tps_closed_v); }
-static void s_tps_closed(int d) { (void)d; learn(&g_ui.s.tps_closed_v); }
-static void f_tps_wot(char *b, size_t n) { fmt_volts(b, n, g_ui.s.tps_wot_v); }
-static void s_tps_wot(int d) { (void)d; learn(&g_ui.s.tps_wot_v); }
 
 static void f_smooth(char *b, size_t n) { snprintf(b, n, "%u ms", g_ui.s.smooth_ms); }
 static void s_smooth(int d) { g_ui.s.smooth_ms = (uint16_t)clampi(g_ui.s.smooth_ms + 25 * d, 0, 500); }
@@ -112,7 +83,7 @@ static void s_heat(int d)
   if (g_ui.hooks.spartan_set_slowheat) g_ui.hooks.spartan_set_slowheat(h);
 }
 
-typedef enum { ROW_STEP, ROW_LEARN, ROW_SPARTAN } row_kind_t;
+typedef enum { ROW_STEP, ROW_SPARTAN } row_kind_t;
 typedef struct {
   const char *name;
   void (*fmt)(char *buf, size_t n);
@@ -121,16 +92,10 @@ typedef struct {
 } row_def_t;
 
 static const row_def_t k_rows[] = {
-  { "Lean at load \xCE\xBB", f_lload, s_lload, ROW_STEP },
-  { "Lean at load for", f_lload_t, s_lload_t, ROW_STEP },
-  { "Load from throttle", f_load, s_load, ROW_STEP },
-  { "Lean part thr. \xCE\xBB", f_lpart, s_lpart, ROW_STEP },
-  { "Lean part thr. for", f_lpart_t, s_lpart_t, ROW_STEP },
+  { "Lean limit \xCE\xBB", f_lean, s_lean, ROW_STEP },
+  { "Lean delay", f_lean_t, s_lean_t, ROW_STEP },
   { "Rich limit \xCE\xBB", f_rich, s_rich, ROW_STEP },
-  { "Rich for", f_rich_t, s_rich_t, ROW_STEP },
-  { "Closed throttle", f_closed, s_closed, ROW_STEP },
-  { "TPS closed", f_tps_closed, s_tps_closed, ROW_LEARN },
-  { "TPS WOT", f_tps_wot, s_tps_wot, ROW_LEARN },
+  { "Rich delay", f_rich_t, s_rich_t, ROW_STEP },
   { "Fuel", f_fuel, s_fuel, ROW_STEP },
   { "Custom stoich", f_custom, s_custom, ROW_STEP },
   { "Main unit", f_unit, s_unit, ROW_STEP },
@@ -202,11 +167,6 @@ void ui_settings_create(void)
     s_values[i] = ui_label(row, &afr_font_24, COL_TEXT, "");
     lv_obj_align(s_values[i], LV_ALIGN_LEFT_MID, 0, 12);
 
-    if (k_rows[i].kind == ROW_LEARN) {
-      lv_obj_t *b = ui_button(row, "Learn", 120, 44, step_cb, (void *)(intptr_t)((i << 1) | 1));
-      lv_obj_align(b, LV_ALIGN_RIGHT_MID, 0, 0);
-      continue;
-    }
     lv_obj_t *minus = ui_button(row, "-", 56, 44, step_cb, (void *)(intptr_t)(i << 1));
     lv_obj_align(minus, LV_ALIGN_RIGHT_MID, -64, 0);
     lv_obj_t *plus = ui_button(row, "+", 56, 44, step_cb, (void *)(intptr_t)((i << 1) | 1));
@@ -295,7 +255,7 @@ void ui_service_refresh(void)
   const reading_t *r = &g_ui.r;
   static const char *const src[] = { "NOMINAL", "STORED", "FRESH" };
   static const char *const logs[] = { "off", "OK", "no card", "error" };
-  char v[16], lam[16], a[16], b[16], l0[16], l5[16], sup[16], tv[16], tp[16];
+  char v[16], lam[16], a[16], b[16], l0[16], l5[16], sup[16];
 
   fx(v, sizeof v, r->v_out, 3);
   if (isnan(r->lambda)) snprintf(lam, sizeof lam, "-");
@@ -304,10 +264,6 @@ void ui_service_refresh(void)
   fx(b, sizeof b, st->cal_b * 1000.0f, 1);
   fx(l0, sizeof l0, g_ui.range.lam0, 3);
   fx(l5, sizeof l5, g_ui.range.lam5, 3);
-  if (isnan(r->tps_v)) snprintf(tv, sizeof tv, "-");
-  else fx(tv, sizeof tv, r->tps_v, 2);
-  if (isnan(r->tps)) snprintf(tp, sizeof tp, "%s", (r->flags & FLAG_TPS_FAULT) ? "FAULT" : "not learnt");
-  else { fx(tp, sizeof tp, r->tps, 0); strlcat(tp, " %", sizeof tp); }
   if (isnan(r->supply_v)) snprintf(sup, sizeof sup, "not fitted");
   else { fx(sup, sizeof sup, r->supply_v, 1); strlcat(sup, " V", sizeof sup); }
 
@@ -320,8 +276,7 @@ void ui_service_refresh(void)
            "Cal %s%s\na %s uV/code, b %s mV\n"
            "State %s  LED %s\n"
            "v_out %s V  \xCE\xBB %s\n"
-           "TPS %s V  %s\n"
-           "Alarm %s\n"
+           "Warning %s\n"
            "Supply %s\n"
            "ADC %lu conv, %lu missed, %lu gaps\n"
            "%lu spikes, %lu aux errors\n"
@@ -334,7 +289,7 @@ void ui_service_refresh(void)
            st->cal_src < 3 ? src[st->cal_src] : "?", st->cal_rejected ? " (last fit rejected)" : "",
            a, b,
            gs_state_name(r->state), led_pattern_name((led_pattern_t)r->led_pattern),
-           v, lam, tv, tp, alarm_name((alarm_t)r->alarm), sup,
+           v, lam, alarm_name((alarm_t)r->alarm), sup,
            (unsigned long)st->raw_conversions, (unsigned long)st->missed,
            (unsigned long)st->rdy_timeouts, (unsigned long)st->spikes,
            (unsigned long)st->aux_errors,

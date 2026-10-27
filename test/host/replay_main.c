@@ -1,7 +1,7 @@
 /* afr_replay: runs logged readings back through afr_core.
  *
- * stdin:  t_ms,v_out,led,supply_v,tps   (one reading per line; supply and
- *                                        tps blank if unknown)
+ * stdin:  t_ms,v_out,led,supply_v      (one reading per line; supply blank
+ *                                        if unknown)
  * stdout: t_ms,state,lambda,alarm       (recomputed)
  *         # peaks rich=<λ> lean=<λ>     (last line)
  *
@@ -19,8 +19,7 @@ static void usage(void)
 {
   fprintf(stderr,
           "usage: afr_replay [--period-ms N] [--lam0 L] [--lam5 L] [--stoich S] [--smooth-ms N]\n"
-          "                  [--lean-load L,MS] [--lean-part L,MS] [--rich L,MS]\n"
-          "                  [--load-pct P] [--closed-pct P] [--supply]\n");
+          "                  [--lean L,MS] [--rich L,MS] [--supply]\n");
   exit(2);
 }
 
@@ -39,8 +38,6 @@ int main(int argc, char **argv)
     .stoich = 14.7f,
     .smooth_ms = 50,
     .alarm = alarms_default_cfg(),
-    .tps_closed_v = NAN,
-    .tps_wot_v = NAN,
   };
   unsigned period = 50;
   bool supply = false;
@@ -55,11 +52,8 @@ int main(int argc, char **argv)
     else if (!strcmp(a, "--lam5")) cfg.range.lam5 = strtof(v, NULL);
     else if (!strcmp(a, "--stoich")) cfg.stoich = strtof(v, NULL);
     else if (!strcmp(a, "--smooth-ms")) cfg.smooth_ms = (uint16_t)strtoul(v, NULL, 10);
-    else if (!strcmp(a, "--lean-load")) parse_limit(v, &cfg.alarm.lean_load, &cfg.alarm.lean_load_ms);
-    else if (!strcmp(a, "--lean-part")) parse_limit(v, &cfg.alarm.lean_part, &cfg.alarm.lean_part_ms);
+    else if (!strcmp(a, "--lean")) parse_limit(v, &cfg.alarm.lean, &cfg.alarm.lean_ms);
     else if (!strcmp(a, "--rich")) parse_limit(v, &cfg.alarm.rich, &cfg.alarm.rich_ms);
-    else if (!strcmp(a, "--load-pct")) cfg.alarm.load_pct = strtof(v, NULL);
-    else if (!strcmp(a, "--closed-pct")) cfg.alarm.closed_pct = strtof(v, NULL);
     else usage();
     i++;
   }
@@ -74,10 +68,10 @@ int main(int argc, char **argv)
 
   char line[256];
   while (fgets(line, sizeof line, stdin)) {
-    char *f[5] = { 0 };
+    char *f[4] = { 0 };
     int n = 0;
     char *s = line;
-    while (n < 5) {
+    while (n < 4) {
       f[n++] = s;
       char *c = strpbrk(s, ",\r\n");
       if (!c) break;
@@ -91,12 +85,11 @@ int main(int argc, char **argv)
     float v = f[1][0] ? strtof(f[1], NULL) : NAN;
     led_pattern_t led = led_pattern_parse(f[2]);
     float sv = (supply && n >= 4 && f[3][0]) ? strtof(f[3], NULL) : NAN;
-    float tps = (n >= 5 && f[4][0]) ? strtof(f[4], NULL) : NAN;
     if (!started) {
       afr_pipeline_start(&p, t);
       started = true;
     }
-    afr_pipeline_step_volts(&p, t, v, led, sv, tps, &r);
+    afr_pipeline_step_volts(&p, t, v, led, sv, &r);
     char lam[16];
     log_fmt_fixed(lam, sizeof lam, r.lambda, 4);
     printf("%lu,%s,%s,%c\n", (unsigned long)r.t_ms, gs_state_name(r.state), lam,

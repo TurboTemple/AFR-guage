@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define LOG_COLUMNS "t_ms,state,lambda,afr,v_out,led,tps,supply_v,alarm,dropped"
+#define LOG_COLUMNS "t_ms,state,lambda,afr,v_out,led,supply_v,alarm,dropped"
 #define LOG_ROW_MAX 112
 
 /* Fixed-point formatting: newlib's float printf is slow and large. Writes

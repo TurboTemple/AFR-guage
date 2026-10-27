@@ -1,6 +1,6 @@
 /* End to end through afr_pipeline, sampled the way the firmware samples:
- * the lambda ADC at 860 SPS through the decimator, the LED at 50 Hz and the
- * throttle at 200 Hz from the second ADC. */
+ * the lambda ADC at 860 SPS through the decimator, the LED at 50 Hz from
+ * the second ADC. */
 #include "unity.h"
 
 #include <math.h>
@@ -17,18 +17,14 @@ static afr_pipeline_t p;
 static decim_t dec;
 static reading_t r;
 static uint64_t t_us;
-static uint64_t next_led_us, next_tps_us;
+static uint64_t next_led_us;
 
 /* The simulated car. */
 static float chain_a, chain_b;  /* true divider/ADC calibration */
 static float spartan_v;         /* linear output */
 static uint32_t led_period, led_on;
-static float tps_pct;           /* NAN: no TPS signal */
 static bool adc_fail;
 static unsigned shown_outside_ready, steps;
-
-#define TPS_CLOSED_V 0.60f
-#define TPS_WOT_V    4.40f
 
 static afr_config_t config(void)
 {
@@ -37,8 +33,6 @@ static afr_config_t config(void)
     .stoich = 14.7f,
     .smooth_ms = 50,
     .alarm = alarms_default_cfg(),
-    .tps_closed_v = TPS_CLOSED_V,
-    .tps_wot_v = TPS_WOT_V,
   };
   return c;
 }
@@ -49,13 +43,12 @@ static void start(const cal_coeffs_t *stored)
   afr_pipeline_init(&p, &c, stored, false, AFR_SAMPLE_MS, 0);
   afr_pipeline_start(&p, 0);
   decim_init(&dec, SPIKE_CODES);
-  t_us = next_led_us = next_tps_us = 0;
+  t_us = next_led_us = 0;
   chain_a = CAL_A_NOMINAL;
   chain_b = 0.0f;
   spartan_v = 0.0f;
   led_period = 0;
   led_on = 0;
-  tps_pct = 0.0f;
   adc_fail = false;
   shown_outside_ready = steps = 0;
 }
@@ -68,11 +61,6 @@ static void run(uint32_t dur_ms)
     if (t_us >= next_led_us) {
       next_led_us += 20000;
       afr_pipeline_led_sample(&p, t_ms, sim_adc_code(sim_blink(t_ms, led_period, led_on) ? 3.0f : 0.0f));
-    }
-    if (t_us >= next_tps_us) {
-      next_tps_us += 5000;
-      float v = isnan(tps_pct) ? 0.0f : TPS_CLOSED_V + (TPS_WOT_V - TPS_CLOSED_V) * tps_pct / 100.0f;
-      afr_pipeline_tps_sample(&p, !isnan(tps_pct), sim_code(v, CAL_A_NOMINAL, 0.0f, 0.0f));
     }
     float mean;
     uint64_t t_mid;
@@ -240,70 +228,46 @@ static void test_rejected_fit_keeps_last_good(void)
   TEST_ASSERT_FLOAT_WITHIN(1e-9, CAL_A_NOMINAL, p.cal.a);
 }
 
-/* A pass: launch at WOT, rich and steady; then a lean-out; then the lift
- * and fuel cut. */
-static void test_pass_lean_out_alarms_fast(void)
+/* A pass: launch rich and steady; then a lean-out; then the lift and fuel
+ * cut, which warns too (there is no throttle signal). */
+static void test_pass_lean_out_warns(void)
 {
   get_ready();
-  tps_pct = 100.0f;
   spartan_v = sim_v_for_lambda(0.82f);
   run(3000);
   TEST_ASSERT_EQUAL_INT(ALARM_NONE, r.alarm);
-  TEST_ASSERT_TRUE(r.flags & FLAG_UNDER_LOAD);
-  TEST_ASSERT_TRUE(r.flags & FLAG_TPS_OK);
 
-  spartan_v = sim_v_for_lambda(0.95f);
-  run(95);
+  spartan_v = sim_v_for_lambda(1.10f);
+  run(295);
   TEST_ASSERT_EQUAL_INT(ALARM_NONE, r.alarm);
   run(15);
-  TEST_ASSERT_EQUAL_INT(ALARM_LEAN_LOAD, r.alarm);
+  TEST_ASSERT_EQUAL_INT(ALARM_LEAN, r.alarm);
   TEST_ASSERT_TRUE(afr_pipeline_take_events(&p) & AFR_EVT_ALARM);
 
-  /* Lift: the live alarm ends with the load, the event stays. */
-  tps_pct = 0.0f;
+  spartan_v = sim_v_for_lambda(0.84f);
+  run(10);
+  TEST_ASSERT_EQUAL_INT(ALARM_NONE, r.alarm);
+
   spartan_v = 5.0f;
   run(5000);
   TEST_ASSERT_EQUAL_INT(ST_LEAN_RAIL, r.state);
-  TEST_ASSERT_EQUAL_INT(ALARM_NONE, r.alarm);
-  TEST_ASSERT_TRUE(r.flags & FLAG_EVENT_PENDING);
-  TEST_ASSERT_EQUAL_INT(ALARM_LEAN_LOAD, r.event.type);
-  TEST_ASSERT_FLOAT_WITHIN(0.003, 0.95, r.event.lambda);
-  TEST_ASSERT_FLOAT_WITHIN(0.5, 100.0, r.event.tps);
-  /* Peaks are from the pass, not the fuel cut. */
-  TEST_ASSERT_FLOAT_WITHIN(0.003, 0.95, r.peak_lean);
+  TEST_ASSERT_EQUAL_INT(ALARM_LEAN, r.alarm);
+  TEST_ASSERT_FLOAT_WITHIN(0.003, 1.10, r.peak_lean);
   TEST_ASSERT_FLOAT_WITHIN(0.003, 0.82, r.peak_rich);
-  TEST_ASSERT_FALSE(r.flags & FLAG_LEAN_RAIL_SEEN);
-
-  afr_pipeline_ack_alarm(&p);
-  run(5);
-  TEST_ASSERT_FALSE(r.flags & FLAG_EVENT_PENDING);
+  TEST_ASSERT_TRUE(r.flags & FLAG_LEAN_RAIL_SEEN);
 }
 
-static void test_clean_pass_and_fuel_cut_no_alarm(void)
+static void test_clean_session_no_warning(void)
 {
   get_ready();
   for (int pass = 0; pass < 5; pass++) {
-    tps_pct = 100.0f;
     spartan_v = sim_v_for_lambda(0.80f + 0.01f * (float)pass);
     run(9000);
-    tps_pct = 0.0f;
-    spartan_v = 5.0f;
-    run(6000);
     spartan_v = sim_v_for_lambda(1.0f);
     run(20000);
   }
-  TEST_ASSERT_FALSE(r.flags & FLAG_EVENT_PENDING);
   TEST_ASSERT_EQUAL_INT(ALARM_NONE, r.alarm);
-}
-
-static void test_tps_fault_flagged(void)
-{
-  get_ready();
-  tps_pct = NAN; /* wire off: reads 0 V */
-  run(50);
-  TEST_ASSERT_TRUE(isnan(r.tps));
-  TEST_ASSERT_TRUE(r.flags & FLAG_TPS_FAULT);
-  TEST_ASSERT_FALSE(r.flags & FLAG_TPS_OK);
+  TEST_ASSERT_FALSE(afr_pipeline_take_events(&p) & AFR_EVT_ALARM);
 }
 
 static void test_spartan_power_loss(void)
@@ -338,18 +302,17 @@ static void test_volts_mode_replays_states(void)
   afr_pipeline_init(&p, &c, NULL, false, 5, 0);
   afr_pipeline_start(&p, 0);
   uint32_t t = 0;
-  for (; t < 1000; t += 5) afr_pipeline_step_volts(&p, t, 0.0f, LED_OFF, NAN, 0.0f, &r);
+  for (; t < 1000; t += 5) afr_pipeline_step_volts(&p, t, 0.0f, LED_OFF, NAN, &r);
   TEST_ASSERT_EQUAL_INT(ST_NO_SPARTAN, r.state);
-  for (; t < 6000; t += 5) afr_pipeline_step_volts(&p, t, 1.666f, LED_SLOW, NAN, 0.0f, &r);
+  for (; t < 6000; t += 5) afr_pipeline_step_volts(&p, t, 1.666f, LED_SLOW, NAN, &r);
   TEST_ASSERT_EQUAL_INT(ST_SEQUENCER, r.state);
-  for (; t < 11000; t += 5) afr_pipeline_step_volts(&p, t, 3.333f, LED_SLOW, NAN, 0.0f, &r);
-  afr_pipeline_step_volts(&p, t, 1.0f, LED_SLOW, NAN, 0.0f, &r);
+  for (; t < 11000; t += 5) afr_pipeline_step_volts(&p, t, 3.333f, LED_SLOW, NAN, &r);
+  afr_pipeline_step_volts(&p, t, 1.0f, LED_SLOW, NAN, &r);
   TEST_ASSERT_EQUAL_INT(ST_WARMING, r.state);
   t += 5;
-  afr_pipeline_step_volts(&p, t, 2.0f, LED_STEADY, NAN, 50.0f, &r);
+  afr_pipeline_step_volts(&p, t, 2.0f, LED_STEADY, NAN, &r);
   TEST_ASSERT_EQUAL_INT(ST_READY, r.state);
   TEST_ASSERT_FLOAT_WITHIN(1e-5, 0.68 + 0.136 * 2.0, r.lambda);
-  TEST_ASSERT_FLOAT_WITHIN(1e-5, 50.0, r.tps);
 }
 
 int main(void)
@@ -362,9 +325,8 @@ int main(void)
   RUN_TEST(test_uncalibrated_error_is_removed);
   RUN_TEST(test_stored_calibration_used_when_no_plateaus);
   RUN_TEST(test_rejected_fit_keeps_last_good);
-  RUN_TEST(test_pass_lean_out_alarms_fast);
-  RUN_TEST(test_clean_pass_and_fuel_cut_no_alarm);
-  RUN_TEST(test_tps_fault_flagged);
+  RUN_TEST(test_pass_lean_out_warns);
+  RUN_TEST(test_clean_session_no_warning);
   RUN_TEST(test_spartan_power_loss);
   RUN_TEST(test_i2c_fault);
   RUN_TEST(test_volts_mode_replays_states);

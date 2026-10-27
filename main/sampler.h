@@ -9,8 +9,8 @@
  * dropped and counted, never blocking).
  *
  * `aux` (core 1, below the sampler): the second ADS1115 in single-shot
- * mode, TPS at 200 Hz, LED at 50 Hz, supply at 10 Hz. Values reach the
- * sampler through a mailbox, so only the sampler touches the pipeline. */
+ * mode, LED at 50 Hz, supply at 10 Hz. Values reach the sampler through a
+ * mailbox, so only the sampler touches the pipeline. */
 #pragma once
 
 #include <stdbool.h>
@@ -30,14 +30,13 @@ typedef struct {
   uint32_t aux_errors;       /* failed housekeeping reads */
 } sampler_stats_t;
 
-/* lambda NULL: that ADC was not found (FAULT). aux NULL: the LED/TPS ADC
- * was not found (FAULT). */
+/* lambda NULL: that ADC was not found (FAULT). aux NULL: the LED ADC was
+ * not found (FAULT). */
 esp_err_t sampler_start(ads1115_t *lambda, ads1115_t *aux, const afr_config_t *cfg,
                         const cal_coeffs_t *stored, bool supply_fitted);
 /* Applied before the next sample. */
 void sampler_set_config(const afr_config_t *cfg);
 void sampler_reset_peaks(void);
-void sampler_ack_alarm(void);
 /* The newest reading (non-blocking). */
 bool sampler_latest(reading_t *out);
 /* Bits are AFR_EVT_*. */

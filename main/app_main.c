@@ -76,8 +76,6 @@ static afr_config_t config_from(const afr_settings_t *s)
     .stoich = settings_stoich(s),
     .smooth_ms = s->smooth_ms,
     .alarm = settings_alarm_cfg(s),
-    .tps_closed_v = s->tps_closed_v,
-    .tps_wot_v = s->tps_wot_v,
   };
   return c;
 }
@@ -137,12 +135,6 @@ static void ui_settings_changed(const afr_settings_t *s)
 }
 
 static void ui_set_brightness(int pct) { bsp_display_brightness_set(pct); }
-
-static float ui_tps_volts(void)
-{
-  reading_t r;
-  return sampler_latest(&r) ? r.tps_v : NAN;
-}
 
 static void ui_set_clock(const struct tm *tm)
 {
@@ -246,8 +238,8 @@ static void handle_events(EventBits_t ev)
   if (ev & AFR_EVT_ALARM) {
     reading_t r;
     if (sampler_latest(&r)) {
-      meta_f("alarm", "%s t_ms=%lu lambda=%.3f tps=%.0f", alarm_name((alarm_t)r.alarm),
-             (unsigned long)r.t_ms, (double)r.lambda, (double)r.tps);
+      meta_f("warning", "%s t_ms=%lu lambda=%.3f", alarm_name((alarm_t)r.alarm),
+             (unsigned long)r.t_ms, (double)r.lambda);
     }
   }
   if (ev & AFR_EVT_SPARTAN_UP) {
@@ -280,16 +272,11 @@ static void handle_events(EventBits_t ev)
   }
 }
 
-/* The alarm and TPS settings in force, as '#' lines replay.py reads. */
+/* The warning settings in force, as '#' lines replay.py reads. */
 static void log_alarm_settings(void)
 {
-  meta_f("lean_load", "%.2f,%u", (double)s_settings.lean_load, s_settings.lean_load_ms);
-  meta_f("lean_part", "%.2f,%u", (double)s_settings.lean_part, s_settings.lean_part_ms);
+  meta_f("lean", "%.2f,%u", (double)s_settings.lean, s_settings.lean_ms);
   meta_f("rich", "%.2f,%u", (double)s_settings.rich, s_settings.rich_ms);
-  meta_f("load_pct", "%u", s_settings.load_pct);
-  meta_f("closed_pct", "%u", s_settings.closed_pct);
-  meta_f("tps_learnt", "closed %.3f V, WOT %.3f V", (double)s_settings.tps_closed_v,
-         (double)s_settings.tps_wot_v);
   meta_f("smooth_ms", "%u", s_settings.smooth_ms);
 }
 
@@ -396,8 +383,6 @@ void app_main(void)
     .get_reading = sampler_latest,
     .get_status = ui_get_status,
     .reset_peaks = sampler_reset_peaks,
-    .ack_alarm = sampler_ack_alarm,
-    .tps_volts = ui_tps_volts,
     .settings_changed = ui_settings_changed,
     .set_brightness = ui_set_brightness,
     .set_clock = ui_set_clock,

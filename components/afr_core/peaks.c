@@ -10,9 +10,8 @@ void peaks_reset(peaks_t *p)
   p->lean_rail = false;
 }
 
-void peaks_update(peaks_t *p, gauge_state_t st, float lambda, bool counts)
+void peaks_update(peaks_t *p, gauge_state_t st, float lambda)
 {
-  if (!counts) return;
   if (st == ST_RICH_RAIL) p->rich_rail = true;
   if (st == ST_LEAN_RAIL) p->lean_rail = true;
   if (st != ST_READY || isnan(lambda)) return;

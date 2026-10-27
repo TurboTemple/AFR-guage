@@ -57,7 +57,7 @@ target_link_libraries(afr_replay PRIVATE afr_core)
 target_compile_options(afr_replay PRIVATE -Wall -Wextra -Werror)
 
 # A simulated session through the full path, logged at the full rate,
-# then replayed: tools/replay.py must reproduce its states, alarms and peaks.
+# then replayed: tools/replay.py must reproduce its states, warnings and peaks.
 add_executable(afr_simlog simlog_main.c)
 target_link_libraries(afr_simlog PRIVATE afr_core)
 target_compile_options(afr_simlog PRIVATE -Wall -Wextra -Werror)
@@ -65,5 +65,5 @@ target_compile_options(afr_simlog PRIVATE -Wall -Wextra -Werror)
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_FOUND)
   add_test(NAME replay_simlog
-    COMMAND sh -c "$<TARGET_FILE:afr_simlog> > simlog.csv && ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/../../tools/replay.py simlog.csv --bin $<TARGET_FILE:afr_replay> --expect-alarm D")
+    COMMAND sh -c "$<TARGET_FILE:afr_simlog> > simlog.csv && ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/../../tools/replay.py simlog.csv --bin $<TARGET_FILE:afr_replay> --expect-alarm LR")
 endif()
