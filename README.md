@@ -2,6 +2,8 @@
 
 Firmware for a standalone in-car wideband lambda gauge built for drag racing. A 14Point7 Spartan 3 Lite v2 runs a Bosch LSU 4.9 sensor. Two ADS1115s on a Waveshare ESP32-S3-Touch-AMOLED-1.75 read it, and the board shows lambda/AFR on the 466 × 466 round screen. The screen turns red when the mixture goes too lean (amber when too rich), a double-tap switches between street and race limits, and every sample is logged to microSD. It only displays and logs; it never feeds the ECU.
 
+**To build and fit one, start with [docs/INSTALL.md](docs/INSTALL.md)**: shopping list, flashing, the interface board, fitting the sensor, car wiring and HP Tuners VCM Scanner logging.
+
 It is built from the *Wideband AFR Gauge – Technical Build Spec*, with the measurement chain upgraded for accuracy (v2, below). Where the firmware departs from a design decision in the spec, the reason is under [Changes from the spec](#changes-from-the-spec).
 
 | Race mode, on target | Race mode, lean warning | Lean ring after a lean-out | Street mode |
