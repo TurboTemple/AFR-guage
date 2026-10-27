@@ -46,10 +46,11 @@ size_t log_format_row(char *buf, size_t n, const reading_t *r, uint32_t dropped)
   }
   log_fmt_fixed(v, sizeof v, r->v_out, 4);
   log_fmt_fixed(sup, sizeof sup, r->supply_v, 2);
-  int len = snprintf(buf, n, "%lu,%s,%s,%s,%s,%s,%s,%c,%lu\n",
+  int len = snprintf(buf, n, "%lu,%s,%s,%s,%s,%s,%s,%c,%c,%lu\n",
                      (unsigned long)r->t_ms, gs_state_name(r->state), lam, afr, v,
                      led_pattern_name((led_pattern_t)r->led_pattern), sup,
-                     alarm_char((alarm_t)r->alarm), (unsigned long)dropped);
+                     alarm_char((alarm_t)r->alarm), (r->flags & FLAG_RACE) ? 'R' : 'S',
+                     (unsigned long)dropped);
   return len > 0 && (size_t)len < n ? (size_t)len : 0;
 }
 

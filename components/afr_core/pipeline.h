@@ -38,12 +38,14 @@ enum {
   AFR_EVT_CAL_ACCEPTED = 1u << 2, /* fresh calibration: save it */
   AFR_EVT_CAL_REJECTED = 1u << 3, /* fit rejected: log CAL_REJECTED */
   AFR_EVT_ALARM        = 1u << 4, /* a warning began */
+  AFR_EVT_LEAN_EVENT   = 1u << 5, /* a lean-out lit the ring: lean_event */
 };
 
 typedef struct {
   lambda_range_t range;   /* from GETLAMZEROV / GETLAMFIVEV */
   float       stoich;     /* of the selected fuel */
   uint16_t    smooth_ms;  /* display filter tau */
+  bool        race;       /* race mode (logged; the limits are in alarm) */
   alarm_cfg_t alarm;
 } afr_config_t;
 
@@ -70,6 +72,7 @@ typedef struct {
   float          supply_v;
   led_pattern_t  led_pattern;
   alarm_t        last_alarm;
+  lean_event_t   lean_event;  /* the last lean-out (AFR_EVT_LEAN_EVENT) */
   uint8_t        events;
 } afr_pipeline_t;
 
@@ -79,7 +82,9 @@ void afr_pipeline_init(afr_pipeline_t *p, const afr_config_t *cfg, const cal_coe
 /* Initialisation complete: BOOT -> NO_SPARTAN. */
 void afr_pipeline_start(afr_pipeline_t *p, uint32_t t_ms);
 void afr_pipeline_fault(afr_pipeline_t *p, fault_reason_t reason, uint32_t t_ms);
+/* New limits re-arm the warnings (alarms_rearm). */
 void afr_pipeline_set_config(afr_pipeline_t *p, const afr_config_t *cfg);
+/* Long press: peaks and the lean ring. */
 void afr_pipeline_reset_peaks(afr_pipeline_t *p);
 uint8_t afr_pipeline_take_events(afr_pipeline_t *p);
 

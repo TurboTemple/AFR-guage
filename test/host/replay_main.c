@@ -1,7 +1,7 @@
 /* afr_replay: runs logged readings back through afr_core.
  *
- * stdin:  t_ms,v_out,led,supply_v      (one reading per line; supply blank
- *                                        if unknown)
+ * stdin:  t_ms,v_out,led,supply_v,mode (one reading per line; supply blank
+ *                                        if unknown; mode S or R)
  * stdout: t_ms,state,lambda,alarm       (recomputed)
  *         # peaks rich=<λ> lean=<λ>     (last line)
  *
@@ -13,13 +13,14 @@
 #include <string.h>
 
 #include "log_format.h"
+#include "afr_settings.h"
 #include "pipeline.h"
 
 static void usage(void)
 {
   fprintf(stderr,
           "usage: afr_replay [--period-ms N] [--lam0 L] [--lam5 L] [--stoich S] [--smooth-ms N]\n"
-          "                  [--lean L,MS] [--rich L,MS] [--supply]\n");
+          "                  [--lean L,MS] [--race-lean L,MS] [--rich L,MS] [--supply]\n");
   exit(2);
 }
 
@@ -39,6 +40,9 @@ int main(int argc, char **argv)
     .smooth_ms = 50,
     .alarm = alarms_default_cfg(),
   };
+  alarm_cfg_t street = cfg.alarm, race = cfg.alarm;
+  race.lean = RACE_LEAN_DEFAULT;
+  race.lean_ms = RACE_LEAN_MS_DEFAULT;
   unsigned period = 50;
   bool supply = false;
 
@@ -52,13 +56,19 @@ int main(int argc, char **argv)
     else if (!strcmp(a, "--lam5")) cfg.range.lam5 = strtof(v, NULL);
     else if (!strcmp(a, "--stoich")) cfg.stoich = strtof(v, NULL);
     else if (!strcmp(a, "--smooth-ms")) cfg.smooth_ms = (uint16_t)strtoul(v, NULL, 10);
-    else if (!strcmp(a, "--lean")) parse_limit(v, &cfg.alarm.lean, &cfg.alarm.lean_ms);
-    else if (!strcmp(a, "--rich")) parse_limit(v, &cfg.alarm.rich, &cfg.alarm.rich_ms);
+    else if (!strcmp(a, "--lean")) parse_limit(v, &street.lean, &street.lean_ms);
+    else if (!strcmp(a, "--race-lean")) parse_limit(v, &race.lean, &race.lean_ms);
+    else if (!strcmp(a, "--rich")) {
+      parse_limit(v, &street.rich, &street.rich_ms);
+      race.rich = street.rich;
+      race.rich_ms = street.rich_ms;
+    }
     else usage();
     i++;
   }
   if (!conv_range_valid(cfg.range.lam0, cfg.range.lam5) || period == 0) usage();
 
+  cfg.alarm = street;
   static afr_pipeline_t p;
   afr_pipeline_init(&p, &cfg, NULL, supply, (uint16_t)period, 0);
   bool started = false;
@@ -68,10 +78,10 @@ int main(int argc, char **argv)
 
   char line[256];
   while (fgets(line, sizeof line, stdin)) {
-    char *f[4] = { 0 };
+    char *f[5] = { 0 };
     int n = 0;
     char *s = line;
-    while (n < 4) {
+    while (n < 5) {
       f[n++] = s;
       char *c = strpbrk(s, ",\r\n");
       if (!c) break;
@@ -85,6 +95,12 @@ int main(int argc, char **argv)
     float v = f[1][0] ? strtof(f[1], NULL) : NAN;
     led_pattern_t led = led_pattern_parse(f[2]);
     float sv = (supply && n >= 4 && f[3][0]) ? strtof(f[3], NULL) : NAN;
+    bool want_race = n >= 5 && f[4][0] == 'R';
+    if (want_race != cfg.race) {
+      cfg.race = want_race;
+      cfg.alarm = want_race ? race : street;
+      afr_pipeline_set_config(&p, &cfg);
+    }
     if (!started) {
       afr_pipeline_start(&p, t);
       started = true;

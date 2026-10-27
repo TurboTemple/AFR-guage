@@ -15,8 +15,12 @@ static const char *NS = "afr";
 #define K_FUEL_CUST  "fuel_custom"
 #define K_UNIT       "primary_unit"
 #define K_SHOW_AFR   "show_afr"
+#define K_RACE       "race"
 #define K_LEAN       "lean"          /* lambda x 1000 */
 #define K_LEAN_MS    "lean_ms"
+#define K_RACE_LEAN  "race_lean"     /* lambda x 1000 */
+#define K_RACE_MS    "race_lean_ms"
+#define K_RACE_TGT   "race_target"   /* lambda x 1000 */
 #define K_RICH       "rich"          /* lambda x 1000 */
 #define K_RICH_MS    "rich_ms"
 #define K_SMOOTH     "smooth_ms"
@@ -65,8 +69,12 @@ esp_err_t settings_load(afr_settings_t *s)
   if (nvs_get_u32(h, K_FUEL_CUST, &u) == ESP_OK) s->fuel_custom = bitsf(u);
   get_u8(h, K_UNIT, &s->primary_unit);
   get_bool(h, K_SHOW_AFR, &s->show_afr);
+  get_bool(h, K_RACE, &s->race);
   get_milli(h, K_LEAN, &s->lean);
   get_u16(h, K_LEAN_MS, &s->lean_ms);
+  get_milli(h, K_RACE_LEAN, &s->race_lean);
+  get_u16(h, K_RACE_MS, &s->race_lean_ms);
+  get_milli(h, K_RACE_TGT, &s->race_target);
   get_milli(h, K_RICH, &s->rich);
   get_u16(h, K_RICH_MS, &s->rich_ms);
   get_u16(h, K_SMOOTH, &s->smooth_ms);
@@ -96,8 +104,12 @@ esp_err_t settings_save(const afr_settings_t *s)
   nvs_set_u32(h, K_FUEL_CUST, fbits(s->fuel_custom));
   nvs_set_u8(h, K_UNIT, s->primary_unit);
   nvs_set_u8(h, K_SHOW_AFR, s->show_afr);
+  nvs_set_u8(h, K_RACE, s->race);
   nvs_set_u16(h, K_LEAN, milli(s->lean));
   nvs_set_u16(h, K_LEAN_MS, s->lean_ms);
+  nvs_set_u16(h, K_RACE_LEAN, milli(s->race_lean));
+  nvs_set_u16(h, K_RACE_MS, s->race_lean_ms);
+  nvs_set_u16(h, K_RACE_TGT, milli(s->race_target));
   nvs_set_u16(h, K_RICH, milli(s->rich));
   nvs_set_u16(h, K_RICH_MS, s->rich_ms);
   nvs_set_u16(h, K_SMOOTH, s->smooth_ms);

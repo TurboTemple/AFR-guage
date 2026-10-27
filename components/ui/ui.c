@@ -117,7 +117,7 @@ void ui_splash(const ui_hooks_t *hooks, const char *version)
   hooks->lock();
   lv_obj_t *scr = lv_obj_create(NULL);
   lv_obj_set_style_bg_color(scr, lv_color_hex(COL_BG), 0);
-  lv_obj_t *t = ui_label(scr, &afr_font_40, COL_TEXT, "WIDEBAND");
+  lv_obj_t *t = ui_label(scr, &afr_font_c40, COL_TEXT, "WIDEBAND");
   lv_obj_align(t, LV_ALIGN_CENTER, 0, -30);
   lv_obj_t *v = ui_label(scr, &afr_font_20, COL_GREY, version);
   lv_obj_align(v, LV_ALIGN_CENTER, 0, 25);
@@ -154,7 +154,9 @@ void ui_start(const ui_hooks_t *hooks, const afr_settings_t *s, lambda_range_t r
 
   lv_screen_load(g_ui.scr_main);
   if (splash) lv_obj_delete(splash);
-  lv_timer_create(tick_cb, 33, NULL); /* arc marker at 30 Hz */
+  /* 100 Hz so a warning shows within 10 ms; the bar and digits limit
+   * their own rates. */
+  lv_timer_create(tick_cb, 10, NULL);
   hooks->unlock();
 }
 

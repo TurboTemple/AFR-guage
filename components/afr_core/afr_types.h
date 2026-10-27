@@ -51,6 +51,8 @@ enum {
   FLAG_CAL_REJECTED   = 1u << 3, /* last plateau fit was rejected */
   FLAG_RICH_RAIL_SEEN = 1u << 4, /* rich rail seen since the peaks were reset */
   FLAG_LEAN_RAIL_SEEN = 1u << 5, /* lean rail seen since the peaks were reset */
+  FLAG_RACE           = 1u << 6, /* race-mode limits in force */
+  FLAG_LEAN_RING      = 1u << 7, /* a lean-out in the last 5 minutes (alarms.h) */
 };
 
 typedef struct {

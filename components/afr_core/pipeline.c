@@ -42,12 +42,18 @@ void afr_pipeline_fault(afr_pipeline_t *p, fault_reason_t reason, uint32_t t_ms)
 
 void afr_pipeline_set_config(afr_pipeline_t *p, const afr_config_t *cfg)
 {
+  bool limits = memcmp(&p->cfg.alarm, &cfg->alarm, sizeof cfg->alarm) != 0;
   p->cfg = *cfg;
+  if (limits) {
+    alarms_rearm(&p->alarms);
+    p->last_alarm = ALARM_NONE;
+  }
 }
 
 void afr_pipeline_reset_peaks(afr_pipeline_t *p)
 {
   peaks_reset(&p->peaks);
+  alarms_clear_ring(&p->alarms);
 }
 
 uint8_t afr_pipeline_take_events(afr_pipeline_t *p)
@@ -88,13 +94,15 @@ static void on_capture(afr_pipeline_t *p)
   }
 }
 
-static uint16_t flags_of(const afr_pipeline_t *p)
+static uint16_t flags_of(const afr_pipeline_t *p, uint32_t t)
 {
   uint16_t f = p->cal_src == CAL_SRC_FRESH ? FLAG_CAL_FRESH :
                p->cal_src == CAL_SRC_STORED ? FLAG_CAL_STORED : FLAG_CAL_NOMINAL;
   if (p->cal_rejected) f |= FLAG_CAL_REJECTED;
   if (p->peaks.rich_rail) f |= FLAG_RICH_RAIL_SEEN;
   if (p->peaks.lean_rail) f |= FLAG_LEAN_RAIL_SEEN;
+  if (p->cfg.race) f |= FLAG_RACE;
+  if (alarms_ring(&p->alarms, t)) f |= FLAG_LEAN_RING;
   return f;
 }
 
@@ -141,6 +149,7 @@ static void step(afr_pipeline_t *p, uint32_t t, bool adc_ok, float v_cal, float 
   alarm_t a = alarms_update(&p->alarms, &p->cfg.alarm, st, lambda, t);
   if (a != ALARM_NONE && a != p->last_alarm) p->events |= AFR_EVT_ALARM;
   p->last_alarm = a;
+  if (alarms_take_event(&p->alarms, &p->lean_event)) p->events |= AFR_EVT_LEAN_EVENT;
   peaks_update(&p->peaks, st, lambda);
 
   out->t_ms = t;
@@ -151,7 +160,7 @@ static void step(afr_pipeline_t *p, uint32_t t, bool adc_ok, float v_cal, float 
   out->state = st;
   out->led_pattern = (uint8_t)p->led_pattern;
   out->supply_v = p->supply_fitted ? p->supply_v : NAN;
-  out->flags = flags_of(p);
+  out->flags = flags_of(p, t);
   out->alarm = (uint8_t)a;
   out->fault = (uint8_t)p->sm.fault;
   out->state_since_ms = p->sm.since_ms;

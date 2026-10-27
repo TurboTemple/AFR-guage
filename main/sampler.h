@@ -42,4 +42,6 @@ bool sampler_latest(reading_t *out);
 /* Bits are AFR_EVT_*. */
 EventGroupHandle_t sampler_events(void);
 void sampler_cal(cal_coeffs_t *cal, cal_source_t *src, bool *rejected);
+/* The last lean-out that lit the ring (after AFR_EVT_LEAN_EVENT). */
+lean_event_t sampler_lean_event(void);
 sampler_stats_t sampler_stats(void);

@@ -53,7 +53,7 @@ def replay_args(meta, rows):
     fuel = meta.get("fuel", "").split()
     if len(fuel) >= 2:
         args += ["--stoich", fuel[1]]
-    for key in ("lean", "rich", "smooth_ms"):
+    for key in ("lean", "race_lean", "rich", "smooth_ms"):
         if meta.get(key):
             args += ["--" + key.replace("_", "-"), first_word(meta[key])]
     if meta.get("supply_sense") == "yes":
@@ -85,7 +85,8 @@ def main():
     meta, rows = read_log(a.log)
     if not rows:
         sys.exit(f"{a.log}: no rows")
-    feed = "".join(f"{r['t_ms']},{r['v_out']},{r['led']},{r.get('supply_v', '')}\n" for r in rows)
+    feed = "".join(f"{r['t_ms']},{r['v_out']},{r['led']},{r.get('supply_v', '')},{r.get('mode', 'S')}\n"
+                   for r in rows)
     cmd = [a.bin] + replay_args(meta, rows)
     try:
         out = subprocess.run(cmd, input=feed, capture_output=True, text=True, check=True).stdout

@@ -37,6 +37,7 @@ static bool s_cfg_dirty, s_reset_peaks;
 static cal_coeffs_t s_cal_copy;
 static cal_source_t s_cal_src_copy;
 static bool s_cal_rej_copy;
+static lean_event_t s_lean_copy;
 static sampler_stats_t s_stats;
 
 /* Mailbox from the aux task. */
@@ -99,6 +100,7 @@ static void publish(const reading_t *r, QueueHandle_t log_q, uint32_t *dropped)
     s_cal_copy = s_p.cal;
     s_cal_src_copy = s_p.cal_src;
     s_cal_rej_copy = s_p.cal_rejected;
+    s_lean_copy = s_p.lean_event;
     taskEXIT_CRITICAL(&s_mux);
     xEventGroupSetBits(s_events, ev);
   }
@@ -265,6 +267,14 @@ void sampler_cal(cal_coeffs_t *cal, cal_source_t *src, bool *rejected)
   *src = s_cal_src_copy;
   *rejected = s_cal_rej_copy;
   taskEXIT_CRITICAL(&s_mux);
+}
+
+lean_event_t sampler_lean_event(void)
+{
+  taskENTER_CRITICAL(&s_mux);
+  lean_event_t e = s_lean_copy;
+  taskEXIT_CRITICAL(&s_mux);
+  return e;
 }
 
 sampler_stats_t sampler_stats(void)

@@ -40,6 +40,14 @@ static void f_unit(char *b, size_t n) { snprintf(b, n, "%s", g_ui.s.primary_unit
 static void s_unit(int d) { (void)d; g_ui.s.primary_unit = g_ui.s.primary_unit == UNIT_AFR ? UNIT_LAMBDA : UNIT_AFR; }
 static void f_show(char *b, size_t n) { snprintf(b, n, "%s", g_ui.s.show_afr ? "On" : "Off"); }
 static void s_show(int d) { (void)d; g_ui.s.show_afr = !g_ui.s.show_afr; }
+static void f_mode(char *b, size_t n) { snprintf(b, n, "%s", g_ui.s.race ? "Race" : "Street"); }
+static void s_mode(int d) { (void)d; g_ui.s.race = !g_ui.s.race; }
+static void f_rlean(char *b, size_t n) { fx(b, n, g_ui.s.race_lean, 2); }
+static void s_rlean(int d) { g_ui.s.race_lean = clampf(g_ui.s.race_lean + 0.01f * (float)d, 0.80f, 1.00f); }
+static void f_rlean_t(char *b, size_t n) { snprintf(b, n, "%u ms", g_ui.s.race_lean_ms); }
+static void s_rlean_t(int d) { g_ui.s.race_lean_ms = (uint16_t)clampi(g_ui.s.race_lean_ms + 5 * d, 0, 500); }
+static void f_rtarget(char *b, size_t n) { fx(b, n, g_ui.s.race_target, 2); }
+static void s_rtarget(int d) { g_ui.s.race_target = clampf(g_ui.s.race_target + 0.01f * (float)d, 0.75f, 0.95f); }
 static void f_lean(char *b, size_t n) { fx(b, n, g_ui.s.lean, 2); }
 static void s_lean(int d) { g_ui.s.lean = clampf(g_ui.s.lean + 0.01f * (float)d, 0.85f, 1.30f); }
 static void f_lean_t(char *b, size_t n) { snprintf(b, n, "%u ms", g_ui.s.lean_ms); }
@@ -92,8 +100,12 @@ typedef struct {
 } row_def_t;
 
 static const row_def_t k_rows[] = {
-  { "Lean limit \xCE\xBB", f_lean, s_lean, ROW_STEP },
-  { "Lean delay", f_lean_t, s_lean_t, ROW_STEP },
+  { "Mode", f_mode, s_mode, ROW_STEP },
+  { "Race lean \xCE\xBB", f_rlean, s_rlean, ROW_STEP },
+  { "Race delay", f_rlean_t, s_rlean_t, ROW_STEP },
+  { "Race target \xCE\xBB", f_rtarget, s_rtarget, ROW_STEP },
+  { "Street lean \xCE\xBB", f_lean, s_lean, ROW_STEP },
+  { "Street delay", f_lean_t, s_lean_t, ROW_STEP },
   { "Rich limit \xCE\xBB", f_rich, s_rich, ROW_STEP },
   { "Rich delay", f_rich_t, s_rich_t, ROW_STEP },
   { "Fuel", f_fuel, s_fuel, ROW_STEP },

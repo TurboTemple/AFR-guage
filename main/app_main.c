@@ -75,6 +75,7 @@ static afr_config_t config_from(const afr_settings_t *s)
     .range = s_range,
     .stoich = settings_stoich(s),
     .smooth_ms = s->smooth_ms,
+    .race = s->race,
     .alarm = settings_alarm_cfg(s),
   };
   return c;
@@ -242,6 +243,11 @@ static void handle_events(EventBits_t ev)
              (unsigned long)r.t_ms, (double)r.lambda);
     }
   }
+  if (ev & AFR_EVT_LEAN_EVENT) {
+    lean_event_t e = sampler_lean_event();
+    meta_f("lean_event", "peak %.3f, %lu ms from t_ms=%lu; ring on", (double)e.peak,
+           (unsigned long)e.dur_ms, (unsigned long)e.start_ms);
+  }
   if (ev & AFR_EVT_SPARTAN_UP) {
     s_perf_checked = false;
     meta_f("spartan_up", "t_ms=%lu", (unsigned long)(esp_timer_get_time() / 1000));
@@ -275,7 +281,10 @@ static void handle_events(EventBits_t ev)
 /* The warning settings in force, as '#' lines replay.py reads. */
 static void log_alarm_settings(void)
 {
+  meta_f("mode", "%s", s_settings.race ? "RACE" : "STREET");
   meta_f("lean", "%.2f,%u", (double)s_settings.lean, s_settings.lean_ms);
+  meta_f("race_lean", "%.2f,%u", (double)s_settings.race_lean, s_settings.race_lean_ms);
+  meta_f("race_target", "%.2f", (double)s_settings.race_target);
   meta_f("rich", "%.2f,%u", (double)s_settings.rich, s_settings.rich_ms);
   meta_f("smooth_ms", "%u", s_settings.smooth_ms);
 }

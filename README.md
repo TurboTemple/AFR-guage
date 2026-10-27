@@ -1,14 +1,14 @@
 # Wideband AFR gauge
 
-Firmware for a standalone in-car wideband lambda gauge built for drag racing. A 14Point7 Spartan 3 Lite v2 runs a Bosch LSU 4.9 sensor. Two ADS1115s on a Waveshare ESP32-S3-Touch-AMOLED-1.75 read it, and the board shows lambda/AFR on the 466 × 466 round screen. The screen flashes a warning when the mixture goes too lean or too rich, and every sample is logged to microSD. It only displays and logs; it never feeds the ECU.
+Firmware for a standalone in-car wideband lambda gauge built for drag racing. A 14Point7 Spartan 3 Lite v2 runs a Bosch LSU 4.9 sensor. Two ADS1115s on a Waveshare ESP32-S3-Touch-AMOLED-1.75 read it, and the board shows lambda/AFR on the 466 × 466 round screen. The screen turns red when the mixture goes too lean (amber when too rich), a double-tap switches between street and race limits, and every sample is logged to microSD. It only displays and logs; it never feeds the ECU.
 
 It is built from the *Wideband AFR Gauge – Technical Build Spec*, with the measurement chain upgraded for accuracy (v2, below). Where the firmware departs from a design decision in the spec, the reason is under [Changes from the spec](#changes-from-the-spec).
 
-| Ready, full throttle | Lean warning | Rich warning | Ready, idle |
+| Race mode, on target | Race mode, lean warning | Lean ring after a lean-out | Street mode |
 | --- | --- | --- | --- |
-| ![](docs/screens/ready.png) | ![](docs/screens/lean.png) | ![](docs/screens/rich.png) | ![](docs/screens/ready_after.png) |
-| **Calibrating** | **Lean rail (fuel cut)** | **Strip chart** | **Settings** |
-| ![](docs/screens/calibrating.png) | ![](docs/screens/lean_rail.png) | ![](docs/screens/chart.png) | ![](docs/screens/settings.png) |
+| ![](docs/screens/race.png) | ![](docs/screens/lean.png) | ![](docs/screens/ring.png) | ![](docs/screens/ready.png) |
+| **Rich warning** | **Calibrating** | **Full lean (fuel cut)** | **Settings** |
+| ![](docs/screens/rich.png) | ![](docs/screens/calibrating.png) | ![](docs/screens/lean_rail.png) | ![](docs/screens/settings.png) |
 
 These are host renders of the real UI code through LVGL 9.4 (`test/ui_preview`). They are not photos of the panel.
 
@@ -21,7 +21,8 @@ These are host renders of the real UI code through LVGL 9.4 (`test/ui_preview`).
 | Resolution | 0.00003 λ per ADC step, below the Spartan's own 12-bit DAC step (0.00017 λ) |
 | Accuracy (simulated chain, every sample) | Within 0.002 λ from 0.5 to 4.5 V, after the start-up two-point calibration |
 | Added delay | About 4.65 ms (one block) after the Spartan. The Spartan is held to its 10 ms response mode. |
-| Warnings | Lean above λ 1.05, rich below λ 0.75, after 300 ms (all adjustable) |
+| Race-mode lean warning | 20 ms from the Spartan's output crossing λ 0.92 to the warning (simulated chain, 15 ms hold); the screen is redrawn at once |
+| Street-mode warnings | Lean above λ 1.05, rich below λ 0.75, after 300 ms |
 | Logging | Every 215 Hz sample, unsmoothed, with a warning column. A 9.5 s queue rides out SD stalls. |
 
 Everything runs at full rate all the time; there is no economy or cruise mode. Display smoothing (50 ms default) only affects the big number. Warnings, peaks and logs use the unsmoothed samples.
@@ -43,26 +44,57 @@ These changes to the spec's wiring are required by this firmware.
 
 **Ground-sense wire:** take it from the Spartan's black wire as close to the Spartan as you can, and run it inside the screened cable with the green wire. If it's ever left off, the divider pulls AIN1 to the gauge's ground and the gauge behaves like the v1 single-ended wiring.
 
-## Warnings
+## The main screen
 
-Warnings are always armed and work on λ alone. The gauge has no throttle signal.
+The layout follows a race dash:
 
-| Warning | Comes on when | Default | Display |
-| --- | --- | --- | --- |
-| **LEAN** | λ above the lean limit, or on the lean rail, for the set delay | λ 1.05, 300 ms | Red flash at 4 Hz, "LEAN" under the number |
-| **RICH** | λ below the rich limit, or on the rich rail, for the set delay | λ 0.75, 300 ms | Amber flash at 2 Hz, "RICH" under the number |
+- **Segmented bar** round the edge: λ from rich (blue) through safe (green) to lean (orange) for the current mode's limits. Segments light from the target to the reading. The white arc inside it is the target window (± 0.02); the white tick outside it is the lean limit.
+- **Mode chip** at the top: STREET (outlined) or RACE (amber).
+- **Big number**: λ, or AFR if chosen in Settings.
+- **Delta bar** under the number: the centre line is the target. It grows right in orange when leaner, left in blue when richer, and is green within ± 0.02. Underneath: the difference and the AFR.
+- **Peak rich / peak lean** boxes, and at the bottom the log state and the target, or a problem (calibration rejected, not calibrated, wrong sensor type) in amber.
 
-- A warning goes off as soon as λ is back 0.02 inside its limit, or when λ stops being valid (warming up, Spartan off). Nothing latches.
-- **Fuel cut also shows LEAN.** On a lift the injectors shut off and the sensor sees fresh air, so the reading goes to the lean rail. Without a throttle signal the gauge can't tell that apart from a real lean-out.
-- **Why 1.05 by default:** idle and cruise run closed loop around λ 1.00 ± 0.03, so 1.05 stays quiet there and still catches a genuinely lean engine. It won't catch a full-throttle mixture that is lean of target but still richer than 1.05. For the strip, set *Lean limit* to about 0.92 (a naturally aspirated petrol engine makes best power around 0.85–0.88). The warning will then be on at idle and cruise too.
-- **Peaks** (R/L at the bottom, ticks on the arc) are the richest and leanest READY readings since the last long press. The lean peak includes lifts, because fuel cut reads lean.
+Double-tap switches street / race; a long press resets the peaks and the lean ring (all inputs: [Using it](#using-it)).
+
+## Warnings and race mode
+
+Warnings are always armed and work on λ alone (the gauge has no throttle signal). A lean warning turns the whole screen red with a white LEAN tag; a rich warning turns it amber. Both go off as soon as λ is back 0.02 inside the limit.
+
+| | Street | Race |
+| --- | --- | --- |
+| Lean warning | λ above 1.05 for 300 ms | λ above **0.92** for **15 ms** |
+| Rich warning | λ below 0.75 for 300 ms | the same |
+| Target (delta bar, target window) | 1.00 | **0.86** |
+| Bar scale | λ 0.70–1.30 | λ 0.70–1.05 (zoomed in on full throttle) |
+
+All of these are in Settings. The mode is saved, so the gauge comes back in the mode it was left in.
+
+**Why these race limits** (naturally aspirated LS on petrol, from the research notes):
+
+- **Target 0.86 (12.6:1).** The common NA Gen III/IV full-throttle target is λ 0.83–0.87 (12.2–12.8:1), with 12.5:1 the most quoted. Going leaner gains only 5–10 hp across that band, so most tuners stay on the rich side. Stock GM power enrichment is richer still, about λ 0.76–0.80.
+- **Lean limit 0.92 (13.5:1).** About 13.2–13.5:1 (λ 0.90–0.92) is the leanest tuners accept at full throttle (C5 owners quote 13.4 as the outer bound). Real concern starts near λ 0.93–0.95, and an LS2 has been seen knocking at 13:1 at high rpm. 0.92 leaves room above a 0.86 tune for normal wander but catches a lean trend before the danger zone. If your tune runs leaner than 0.86, set the limit about 0.05 above your target.
+- **Hold 15 ms.** About three processed samples: enough to ignore one disturbed sample, short enough that the gauge adds about 20 ms. The rest of the delay is the sensor (Bosch quotes under 50 ms for the LSU 4.9's response to a gas change) and the exhaust travel time to it, which the gauge can't change. The screen is redrawn the moment a warning starts, rather than on the next 15 ms refresh.
+- **Rich 0.75 (11.0:1).** Richer than any sensible petrol tune, so it points to a fault (injector, regulator, wrong fuel setting) rather than danger.
+
+**What race mode can't tell apart:** at idle, cruise and on the lift after a pass, λ is above 0.92, so the screen is red then too. This is the trade-off of having no throttle signal.
+
+### The lean ring
+
+When a lean warning ends and λ is back to safe, a red ring stays round the edge of the screen for 5 minutes, so a lean moment you missed while watching the track still shows. A long press clears it early. The log gets a `# lean_event=peak …` line.
+
+The ring is only for a lean-out that recovered. These don't light it:
+- **fuel cut on a lift** (the reading reaches the lean rail);
+- **idle or cruise in race mode**: a lean warning that started straight after power-up or a mode change, or that lasted over 30 s;
+- **a lean-out that runs straight into the lift.** The lift's fuel cut ends it on the lean rail, so the gauge can't tell it from an ordinary lift. You still see it live as the red screen, and it's in the log.
+
+**Peaks** are the richest and leanest READY readings since the last long press. The lean peak includes lifts, because fuel cut reads lean.
 
 ## Status
 
 | Part | Verified how |
 | --- | --- |
-| `afr_core`: conversion, decimation, calibration, LED decoder, state machine, warnings, peaks, smoothing, log format, settings, Spartan protocol | 93 Unity tests on the PC. They include end-to-end runs at the real 860 SPS rate with chain errors and noise. |
-| Replay | A simulated session (warm-up, two passes, one leaning out, lifts and fuel cut) is logged at the full rate and replayed with 0 differences (ctest). |
+| `afr_core`: conversion, decimation, calibration, LED decoder, state machine, warnings, race mode, lean ring, peaks, smoothing, log format, settings, Spartan protocol | 102 Unity tests on the PC. They include end-to-end runs at the real 860 SPS rate with chain errors and noise. |
+| Replay | A simulated session (warm-up, a street pass, a race-mode pass that leans out and recovers, lifts and fuel cut) is logged at the full rate and replayed with 0 differences, and must light the lean ring exactly once (ctest). |
 | UI | Rendered on the PC with LVGL 9.4 for every state and warning. |
 | ESP-IDF build | The CI `firmware` job builds the full image with ESP-IDF v5.5.5. |
 | Real hardware | Not yet: follow the build order below. |
@@ -122,18 +154,18 @@ mkdir -p build/frames && build/ui_preview/ui_preview build/frames && python3 too
 
 `/sdcard/logs/YYYYMMDD_HHMMSS.csv` (or `S00001.csv` when the RTC isn't valid). The columns are:
 
-`t_ms,state,lambda,afr,v_out,led,supply_v,alarm,dropped`
+`t_ms,state,lambda,afr,v_out,led,supply_v,alarm,mode,dropped`
 
-`alarm` is the warning: `0`, `R` (rich) or `L` (lean). Every processed sample is logged, about 215 rows/s or roughly 46 MB per hour.
+`alarm` is the warning: `0`, `R` (rich) or `L` (lean). `mode` is `S` (street) or `R` (race). Every processed sample is logged, about 215 rows/s or roughly 46 MB per hour.
 
-Header lines start with `#` and record the firmware, fuel, calibration, end points and the warning settings. Later facts are appended as `#` lines when they happen: the Spartan's identity and response mode, a fresh or rejected calibration, each warning (`# warning=LEAN t_ms=… lambda=…`), settings changes, and a clock change. `replay.py` reads those settings from the header. At boot the previous file is cut back to its last complete row. Format cards FAT32 with 32 KB clusters.
+Header lines start with `#` and record the firmware, fuel, calibration, end points, the mode and both modes' warning settings. Later facts are appended as `#` lines when they happen: the Spartan's identity and response mode, a fresh or rejected calibration, each warning (`# warning=LEAN t_ms=… lambda=…`), each lean-out that lit the ring (`# lean_event=peak 0.960, 400 ms …`), settings changes, and a clock change. `replay.py` reads those settings from the header. At boot the previous file is cut back to its last complete row. Format cards FAT32 with 32 KB clusters.
 
 ## Using it
 
 | Input | Action |
 | --- | --- |
-| Tap | Show or hide the AFR line |
-| Long press (1 s) | Reset peaks |
+| Double-tap | Street / race mode |
+| Long press (1 s) | Reset peaks and the lean ring |
 | Swipe left / right | Strip chart (30 s of λ) / Settings |
 | Settings → Clock, Service | Set the RTC; versions, calibration, ADC statistics, ADC check with `SETLINOUT` (tap twice) |
 | BOOT button | Day/night brightness |
@@ -150,7 +182,8 @@ Header lines start with `#` and record the firmware, fuel, calibration, end poin
 - **Calibration detection limit:** the 60 mV plateau window means gain errors over about 1.8 % are never detected, so the ±3 % acceptance on `a` never binds in practice.
 - **NVS keys** are limited to 15 characters. Lambda limits are stored as λ × 1000. Settings schema 3 replaces the earlier ones (defaults load once on upgrade).
 - **Ignition-off with a LiPo:** VBUS loss flushes the log at once. The gauge powers off after 1.5 s without VBUS, so a cranking dip doesn't shut it down.
-- **Fonts:** generated by `tools/make_fonts.py` from Inter (SIL OFL 1.1), with tabular digits, and λ and · in the label fonts.
+- **Fonts:** generated by `tools/make_fonts.py`. The main screen uses Chakra Petch, the menus Inter (both SIL OFL 1.1; licence in `docs/licenses/`). Digits are tabular, and λ comes from Inter because Chakra Petch has none.
+- **Main screen** redesigned as a race dash (above), replacing the spec's arc and marker.
 - The spec's `AFR = 10 + 2 V` is rounded: 0.68 × 14.7 = 9.996. The firmware uses λ × stoich.
 
 ## Open questions (confirm on the hardware)

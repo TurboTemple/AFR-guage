@@ -4,8 +4,14 @@
 #include "lvgl.h"
 
 extern const lv_font_t afr_font_num;
+extern const lv_font_t afr_font_c40;
+extern const lv_font_t afr_font_c26;
+extern const lv_font_t afr_font_c24b;
+extern const lv_font_t afr_font_c22;
+extern const lv_font_t afr_font_c20;
+extern const lv_font_t afr_font_c18b;
+extern const lv_font_t afr_font_12;
 extern const lv_font_t afr_font_20;
 extern const lv_font_t afr_font_22;
 extern const lv_font_t afr_font_24;
 extern const lv_font_t afr_font_28;
-extern const lv_font_t afr_font_40;

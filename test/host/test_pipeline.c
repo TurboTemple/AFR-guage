@@ -270,6 +270,30 @@ static void test_clean_session_no_warning(void)
   TEST_ASSERT_FALSE(afr_pipeline_take_events(&p) & AFR_EVT_ALARM);
 }
 
+/* Race mode: from the Spartan's output stepping lean to the warning,
+ * through the 860 SPS decimator and the hold. */
+static void test_race_warning_latency(void)
+{
+  get_ready();
+  afr_config_t c = config();
+  c.race = true;
+  c.alarm.lean = 0.92f;
+  c.alarm.lean_ms = 15;
+  afr_pipeline_set_config(&p, &c);
+  spartan_v = sim_v_for_lambda(0.86f);
+  run(2000);
+  TEST_ASSERT_EQUAL_INT(ALARM_NONE, r.alarm);
+  TEST_ASSERT_TRUE(r.flags & FLAG_RACE);
+  spartan_v = sim_v_for_lambda(0.95f);
+  uint32_t ms = 0;
+  while (r.alarm != ALARM_LEAN && ms < 200) {
+    run(1);
+    ms++;
+  }
+  /* About 2 blocks to see it (4.65 ms each) plus the 15 ms hold. */
+  TEST_ASSERT_UINT_WITHIN(6, 22, ms);
+}
+
 static void test_spartan_power_loss(void)
 {
   get_ready();
@@ -327,6 +351,7 @@ int main(void)
   RUN_TEST(test_rejected_fit_keeps_last_good);
   RUN_TEST(test_pass_lean_out_warns);
   RUN_TEST(test_clean_session_no_warning);
+  RUN_TEST(test_race_warning_latency);
   RUN_TEST(test_spartan_power_loss);
   RUN_TEST(test_i2c_fault);
   RUN_TEST(test_volts_mode_replays_states);
